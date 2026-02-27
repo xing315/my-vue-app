@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>测试 Supabase 插入操作</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <h1>测试 Supabase 插入操作</h1>
+    <button onclick="testInsert()">测试插入</button>
+    <div id="result"></div>
+
+    <script>
+        const supabaseUrl = 'https://ohnnjrbutzbkmjcdbpxt.supabase.co';
+        const supabaseAnonKey = 'sb_publishable_C8gUyxsyjcE595ZEo4JanQ_QGiHKNF0';
+        
+        const supabase = supabase.createClient(supabaseUrl, supabaseAnonKey);
+        
+        async function testInsert() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '测试中...';
+            
+            try {
+                // 先登录测试用户
+                const { data: loginData, error: loginError } = await supabase.auth.signInWithPassword({
+                    email: '157338342@qq.com',
+                    password: '123456'
+                });
+                
+                if (loginError) {
+                    resultDiv.innerHTML = `登录失败: ${loginError.message}`;
+                    console.error('登录失败:', loginError);
+                    return;
+                }
+                
+                console.log('登录成功:', loginData.user);
+                
+                // 测试插入
+                const { data, error } = await supabase
+                    .from('transactions')
+                    .insert([{
+                        date: '2026-02-27',
+                        person: '丈夫',
+                        amount: 99.99,
+                        category: '测试',
+                        description: '测试插入',
+                        user_id: loginData.user.id
+                    }])
+                    .select();
+                
+                if (error) {
+                    resultDiv.innerHTML = `插入失败: ${error.message}`;
+                    console.error('插入失败:', error);
+                    console.error('错误详情:', {
+                        message: error.message,
+                        code: error.code,
+                        hint: error.hint,
+                        details: error.details
+                    });
+                } else {
+                    resultDiv.innerHTML = '插入成功！';
+                    console.log('插入成功:', data);
+                }
+                
+            } catch (error) {
+                resultDiv.innerHTML = `异常: ${error.message}`;
+                console.error('异常:', error);
+            }
+        }
+    </script>
+</body>
+</html>

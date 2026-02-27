@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Supabase 认证测试</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <h1>Supabase 认证测试</h1>
+    <div id="result"></div>
+    
+    <script>
+        // 配置 Supabase
+        const supabaseUrl = 'https://ohnnjrbutzbkmjcdbpxt.supabase.co';
+        const supabaseAnonKey = 'sb_publishable_C8gUyxsyjcE595ZEo4JanQ_QGiHKNF0';
+        const supabase = supabase.createClient(supabaseUrl, supabaseAnonKey);
+        
+        const resultDiv = document.getElementById('result');
+        
+        async function testAuth() {
+            resultDiv.innerHTML = '<p>测试中...</p>';
+            
+            try {
+                // 测试认证状态
+                const { data: { session } } = await supabase.auth.getSession();
+                resultDiv.innerHTML += `<p>当前会话: ${JSON.stringify(session)}</p>`;
+                
+                if (session) {
+                    resultDiv.innerHTML += `<p>用户ID: ${session.user.id}</p>`;
+                    resultDiv.innerHTML += `<p>用户ID类型: ${typeof session.user.id}</p>`;
+                } else {
+                    resultDiv.innerHTML += '<p>未登录</p>';
+                }
+                
+                // 测试数据库连接
+                resultDiv.innerHTML += '<p>测试数据库连接...</p>';
+                const { data, error } = await supabase
+                    .from('transactions')
+                    .select('*')
+                    .limit(1);
+                
+                if (error) {
+                    resultDiv.innerHTML += `<p style="color: red;">数据库错误: ${error.message}</p>`;
+                } else {
+                    resultDiv.innerHTML += `<p style="color: green;">数据库连接成功</p>`;
+                    resultDiv.innerHTML += `<p>数据: ${JSON.stringify(data)}</p>`;
+                }
+                
+            } catch (error) {
+                resultDiv.innerHTML += `<p style="color: red;">错误: ${error.message}</p>`;
+            }
+        }
+        
+        // 测试登录
+        async function testLogin() {
+            resultDiv.innerHTML = '<p>尝试登录...</p>';
+            
+            try {
+                const { data, error } = await supabase.auth.signInWithPassword({
+                    email: 'test@example.com',
+                    password: 'password123'
+                });
+                
+                if (error) {
+                    resultDiv.innerHTML += `<p style="color: red;">登录失败: ${error.message}</p>`;
+                } else {
+                    resultDiv.innerHTML += `<p style="color: green;">登录成功</p>`;
+                    resultDiv.innerHTML += `<p>用户ID: ${data.user.id}</p>`;
+                    resultDiv.innerHTML += `<p>用户ID类型: ${typeof data.user.id}</p>`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML += `<p style="color: red;">错误: ${error.message}</p>`;
+            }
+        }
+        
+        // 运行测试
+        testAuth();
+    </script>
+</body>
+</html>

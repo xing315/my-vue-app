@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>测试 Supabase 连接</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <h1>测试 Supabase 连接</h1>
+    <button onclick="testConnection()">测试连接</button>
+    <div id="result"></div>
+
+    <script>
+        const supabaseUrl = 'https://ohnnjrbutzbkmjcdbpxt.supabase.co';
+        const supabaseAnonKey = 'sb_publishable_C8gUyxsyjcE595ZEo4JanQ_QGiHKNF0';
+        
+        console.log('Supabase 配置:', {
+            url: supabaseUrl,
+            anonKey: supabaseAnonKey
+        });
+        
+        // 创建 Supabase 客户端
+        const supabaseClient = supabase.createClient(supabaseUrl, supabaseAnonKey);
+        
+        async function testConnection() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '测试中...';
+            
+            try {
+                // 测试认证状态
+                const { data: { session }, error: sessionError } = await supabaseClient.auth.getSession();
+                console.log('会话状态:', { session, sessionError });
+                
+                // 测试数据库连接（只读操作）
+                const { data, error } = await supabaseClient
+                    .from('transactions')
+                    .select('*')
+                    .limit(1);
+                
+                if (error) {
+                    resultDiv.innerHTML = `数据库连接失败: ${error.message}`;
+                    console.error('数据库连接失败:', error);
+                } else {
+                    resultDiv.innerHTML = '数据库连接成功！';
+                    console.log('数据库连接成功:', data);
+                }
+                
+            } catch (error) {
+                resultDiv.innerHTML = `异常: ${error.message}`;
+                console.error('异常:', error);
+            }
+        }
+    </script>
+</body>
+</html>
