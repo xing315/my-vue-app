@@ -15,7 +15,7 @@
         job: '前端',
         salary: 1000,
         department: 'IT',
-        skill: ['HTML', 'CSS', 'JS','JAVA']
+        skill: ['HTML', 'CSS', 'JS','JAVA','SQL']
       }
       ,newSkill:''
     }
