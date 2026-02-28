@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>数据库连接诊断</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+        }
+        .success {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+            color: #721c24;
+        }
+        .info {
+            background-color: #d1ecf1;
+            border-color: #bee5eb;
+            color: #0c5460;
+        }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #5568d3;
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>Supabase 数据库连接诊断</h1>
+    
+    <div id="results"></div>
+    
+    <div class="test-section">
+        <h3>测试操作</h3>
+        <button onclick="testConnection()">测试连接</button>
+        <button onclick="testAuth()">测试认证</button>
+        <button onclick="testRead()">测试读取</button>
+        <button onclick="testInsert()">测试插入</button>
+    </div>
+
+    <script>
+        const supabaseUrl = 'https://ohnnjrbutzbkmjcdbpxt.supabase.co';
+        const supabaseAnonKey = 'sb_publishable_C8gUyxsyjcE595ZEo4JanQ_QGiHKNF0';
+        
+        const supabaseClient = supabase.createClient(supabaseUrl, supabaseAnonKey);
+        
+        function addResult(title, message, type = 'info') {
+            const resultsDiv = document.getElementById('results');
+            const section = document.createElement('div');
+            section.className = `test-section ${type}`;
+            section.innerHTML = `
+                <h3>${title}</h3>
+                <p>${message}</p>
+            `;
+            resultsDiv.appendChild(section);
+        }
+        
+        async function testConnection() {
+            try {
+                const { data, error } = await supabaseClient
+                    .from('transactions')
+                    .select('count')
+                    .limit(1);
+                
+                if (error) {
+                    addResult('连接测试', `连接失败: ${error.message}`, 'error');
+                    console.error('连接错误:', error);
+                } else {
+                    addResult('连接测试', '连接成功！', 'success');
+                    console.log('连接成功:', data);
+                }
+            } catch (error) {
+                addResult('连接测试', `异常: ${error.message}`, 'error');
+                console.error('连接异常:', error);
+            }
+        }
+        
+        async function testAuth() {
+            try {
+                const { data: { user }, error } = await supabaseClient.auth.getUser();
+                
+                if (error) {
+                    addResult('认证测试', `获取用户失败: ${error.message}`, 'error');
+                    console.error('认证错误:', error);
+                } else if (user) {
+                    addResult('认证测试', `用户已登录: ${user.email}`, 'success');
+                    console.log('用户信息:', user);
+                } else {
+                    addResult('认证测试', '用户未登录', 'info');
+                }
+            } catch (error) {
+                addResult('认证测试', `异常: ${error.message}`, 'error');
+                console.error('认证异常:', error);
+            }
+        }
+        
+        async function testRead() {
+            try {
+                const { data, error } = await supabaseClient
+                    .from('transactions')
+                    .select('*')
+                    .limit(5);
+                
+                if (error) {
+                    addResult('读取测试', `读取失败: ${error.message}`, 'error');
+                    console.error('读取错误:', error);
+                } else {
+                    addResult('读取测试', `读取成功！找到 ${data.length} 条记录`, 'success');
+                    console.log('读取的数据:', data);
+                }
+            } catch (error) {
+                addResult('读取测试', `异常: ${error.message}`, 'error');
+                console.error('读取异常:', error);
+            }
+        }
+        
+        async function testInsert() {
+            try {
+                const { data: { user } } = await supabaseClient.auth.getUser();
+                
+                if (!user) {
+                    addResult('插入测试', '请先登录', 'error');
+                    return;
+                }
+                
+                const testData = {
+                    date: new Date().toISOString().split('T')[0],
+                    person: '测试',
+                    amount: 1.00,
+                    category: '测试',
+                    description: '诊断测试数据',
+                    user_id: user.id
+                };
+                
+                console.log('准备插入测试数据:', testData);
+                
+                const { data, error } = await supabaseClient
+                    .from('transactions')
+                    .insert([testData])
+                    .select();
+                
+                if (error) {
+                    addResult('插入测试', `插入失败: ${error.message}`, 'error');
+                    console.error('插入错误:', error);
+                    console.error('错误详情:', {
+                        message: error.message,
+                        code: error.code,
+                        hint: error.hint,
+                        details: error.details
+                    });
+                } else {
+                    addResult('插入测试', `插入成功！`, 'success');
+                    console.log('插入的数据:', data);
+                }
+            } catch (error) {
+                addResult('插入测试', `异常: ${error.message}`, 'error');
+                console.error('插入异常:', error);
+            }
+        }
+        
+        // 自动运行连接测试
+        window.onload = function() {
+            addResult('诊断工具', '点击下方按钮开始测试', 'info');
+        };
+    </script>
+</body>
+</html>

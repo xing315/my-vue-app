@@ -2,13 +2,15 @@
 import Home from './Home.vue'
 import Accounting from './Accounting.vue'
 import Auth from './Auth.vue'
+import Download from './Download.vue'
 import { supabase } from './supabase.js'
 
 export default {
   components: {
     Home,
     Accounting,
-    Auth
+    Auth,
+    Download
   },
   data() {
     return {
@@ -114,6 +116,9 @@ export default {
       <div class="nav-item" :class="{ active: currentPage === 'accounting' }" @click="navigateTo('accounting')">
         家庭记账
       </div>
+      <div class="nav-item" :class="{ active: currentPage === 'download' }" @click="navigateTo('download')">
+        下载APP
+      </div>
       <div v-if="user" class="nav-user">
         <div class="user-info">
           <span class="user-email">{{ user.email }}</span>
@@ -137,6 +142,7 @@ export default {
       <Home v-else-if="currentPage === 'home'" />
       <Accounting v-else-if="currentPage === 'accounting'" />
       <Auth v-else-if="currentPage === 'auth'" @auth-success="handleAuthSuccess" />
+      <Download v-else-if="currentPage === 'download'" />
     </div>
   </div>
 </template>
@@ -272,5 +278,25 @@ export default {
 @keyframes spin {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
+}
+
+@media (max-width: 768px) {
+  .nav-item {
+    padding: 12px 15px;
+    font-size: 16px;
+  }
+  
+  .nav-user {
+    gap: 10px;
+  }
+  
+  .user-email {
+    font-size: 12px;
+  }
+  
+  .btn-logout {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
 }
 </style>
