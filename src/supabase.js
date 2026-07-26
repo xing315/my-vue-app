@@ -18,9 +18,8 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 
 // 监听认证状态变化
 supabase.auth.onAuthStateChange((event, session) => {
-  console.log('Supabase 认证状态变化:', event, session)
+  console.log('Supabase 认证状态变化:', event)
   if (session) {
-    console.log('会话令牌:', session.access_token.substring(0, 20) + '...')
     console.log('用户ID:', session.user.id)
   }
 })

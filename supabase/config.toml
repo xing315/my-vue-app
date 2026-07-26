@@ -1,0 +1,2 @@
+[functions.deepseek-chat]
+verify_jwt = true
