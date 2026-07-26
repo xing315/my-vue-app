@@ -3,300 +3,110 @@ import Home from './Home.vue'
 import Accounting from './Accounting.vue'
 import Auth from './Auth.vue'
 import Download from './Download.vue'
+import Blog from './Blog.vue'
+import News from './News.vue'
+import Analytics from './Analytics.vue'
+import Toolkit from './Toolkit.vue'
 import { supabase } from './supabase.js'
 
 export default {
-  components: {
-    Home,
-    Accounting,
-    Auth,
-    Download
-  },
+  components: { Home, Accounting, Auth, Download, Blog, News, Analytics, Toolkit },
   data() {
     return {
       currentPage: 'home',
       user: null,
-      loading: true
+      loading: true,
+      mobileOpen: false,
+      nav: [
+        { id: 'home', label: '首页', icon: '⌂' },
+        { id: 'blog', label: '博客', icon: '✦' },
+        { id: 'news', label: '资讯', icon: '◫' },
+        { id: 'analytics', label: '数据', icon: '⌁' },
+        { id: 'toolkit', label: '工具', icon: '◇' },
+        { id: 'accounting', label: '记账', icon: '¥' },
+        { id: 'download', label: '下载', icon: '↓' }
+      ]
     }
   },
-  mounted() {
-    this.initializeAuth()
-  },
+  mounted() { this.initializeAuth() },
   methods: {
     async initializeAuth() {
       try {
-        const { data: { session }, error } = await supabase.auth.getSession()
-        
-        if (error) {
-          console.error('获取会话失败:', error)
-          this.loading = false
-          return
-        }
-        
-        if (session?.user) {
-          this.user = session.user
-          console.log('会话恢复成功:', this.user)
-          localStorage.setItem('user', JSON.stringify(this.user))
-        } else {
-          console.log('没有有效的会话，用户需要登录')
-          localStorage.removeItem('user')
-        }
-        
-        supabase.auth.onAuthStateChange((event, session) => {
-          console.log('认证状态变化:', event, session)
-          
-          if (event === 'SIGNED_IN' && session?.user) {
-            this.user = session.user
-            localStorage.setItem('user', JSON.stringify(this.user))
-            console.log('用户登录:', this.user)
-          } else if (event === 'SIGNED_OUT') {
-            this.user = null
-            localStorage.removeItem('user')
-            console.log('用户退出')
-          } else if (event === 'TOKEN_REFRESHED' && session?.user) {
-            this.user = session.user
-            localStorage.setItem('user', JSON.stringify(this.user))
-            console.log('令牌已刷新:', this.user)
-          }
-        })
+        const { data: { session } } = await supabase.auth.getSession()
+        this.user = session?.user || null
+        supabase.auth.onAuthStateChange((_event, session) => { this.user = session?.user || null })
       } catch (error) {
-        console.error('初始化认证失败:', error)
-      } finally {
-        this.loading = false
-      }
+        console.warn('认证服务暂不可用', error)
+      } finally { this.loading = false }
     },
     navigateTo(page) {
-      if (page === 'accounting' && !this.user) {
-        alert('请先登录')
-        return
-      }
-      this.currentPage = page
+      if (page === 'accounting' && !this.user) { this.currentPage = 'auth' }
+      else this.currentPage = page
+      this.mobileOpen = false
+      document.querySelector('.page-content')?.scrollTo(0, 0)
     },
-    handleAuthSuccess(user) {
-      this.user = user
-      console.log('认证成功的用户:', user)
-      console.log('用户ID:', user.id)
-      this.currentPage = 'home'
-    },
+    handleAuthSuccess(user) { this.user = user; this.currentPage = 'home' },
     async logout() {
-      if (!confirm('确定要退出登录吗？')) {
-        return
-      }
-      
-      try {
-        const { error } = await supabase.auth.signOut()
-        
-        if (error) {
-          console.error('退出登录失败:', error)
-          alert('退出登录失败，请重试')
-          return
-        }
-        
-        this.user = null
-        this.currentPage = 'home'
-        localStorage.removeItem('user')
-        console.log('用户已成功退出')
-        
-        alert('已退出登录')
-      } catch (error) {
-        console.error('退出登录异常:', error)
-        alert('退出登录失败，请重试')
-      }
+      if (!confirm('确定要退出登录吗？')) return
+      await supabase.auth.signOut()
+      this.user = null
+      this.currentPage = 'home'
     }
   }
 }
 </script>
 
 <template>
-  <div class="app-container">
-    <nav class="navbar">
-      <div class="nav-item" :class="{ active: currentPage === 'home' }" @click="navigateTo('home')">
-        个人主页
-      </div>
-      <div class="nav-item" :class="{ active: currentPage === 'accounting' }" @click="navigateTo('accounting')">
-        家庭记账
-      </div>
-      <div class="nav-item" :class="{ active: currentPage === 'download' }" @click="navigateTo('download')">
-        下载APP
-      </div>
-      <div v-if="user" class="nav-user">
-        <div class="user-info">
-          <span class="user-email">{{ user.email }}</span>
-          <span class="user-status">已登录</span>
-        </div>
-        <button class="btn-logout" @click="logout">
-          <span class="logout-icon">🚪</span>
-          退出
+  <div class="app-shell">
+    <header class="topbar">
+      <button class="brand" @click="navigateTo('home')" aria-label="返回首页">
+        <span class="brand-mark">Z</span>
+        <span><b>ZHANG SPACE</b><small>张红星的数字花园</small></span>
+      </button>
+      <nav :class="{ open: mobileOpen }">
+        <button v-for="item in nav" :key="item.id" :class="{ active: currentPage === item.id }" @click="navigateTo(item.id)">
+          <span>{{ item.icon }}</span>{{ item.label }}
         </button>
+      </nav>
+      <div class="account-actions">
+        <button v-if="user" class="avatar" :title="user.email" @click="logout">{{ user.email?.[0]?.toUpperCase() }}</button>
+        <button v-else class="login-btn" @click="navigateTo('auth')">登录</button>
+        <button class="menu-btn" @click="mobileOpen = !mobileOpen" aria-label="打开菜单">☰</button>
       </div>
-      <div v-else class="nav-item" @click="currentPage = 'auth'">
-        登录/注册
-      </div>
-    </nav>
-    
-    <div class="page-content">
-      <div v-if="loading" class="loading-container">
-        <div class="loading-spinner"></div>
-        <p>加载中...</p>
-      </div>
-      <Home v-else-if="currentPage === 'home'" />
+    </header>
+
+    <main class="page-content">
+      <div v-if="loading" class="loading-screen"><span></span><p>正在抵达数字空间…</p></div>
+      <Home v-else-if="currentPage === 'home'" @navigate="navigateTo" />
+      <Blog v-else-if="currentPage === 'blog'" />
+      <News v-else-if="currentPage === 'news'" />
+      <Analytics v-else-if="currentPage === 'analytics'" />
+      <Toolkit v-else-if="currentPage === 'toolkit'" />
       <Accounting v-else-if="currentPage === 'accounting'" />
       <Auth v-else-if="currentPage === 'auth'" @auth-success="handleAuthSuccess" />
       <Download v-else-if="currentPage === 'download'" />
-    </div>
+    </main>
   </div>
 </template>
 
 <style>
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-.app-container {
-  width: 100vw;
-  height: 100vh;
-  overflow: hidden;
-}
-
-.navbar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-  display: flex;
-  justify-content: center;
-  z-index: 1000;
-  padding: 0 20px;
-}
-
-.nav-item {
-  padding: 15px 30px;
-  font-size: 18px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  color: #333;
-  border-bottom: 3px solid transparent;
-}
-
-.nav-item:hover {
-  color: #667eea;
-}
-
-.nav-item.active {
-  color: #667eea;
-  border-bottom-color: #667eea;
-}
-
-.nav-user {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  padding: 10px 0;
-}
-
-.user-info {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-}
-
-.user-email {
-  color: #333;
-  font-weight: 500;
-  font-size: 14px;
-}
-
-.user-status {
-  color: #4CAF50;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.btn-logout {
-  background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
-  color: white;
-  border: none;
-  padding: 8px 16px;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  box-shadow: 0 2px 8px rgba(255, 107, 107, 0.3);
-}
-
-.btn-logout:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(255, 107, 107, 0.4);
-}
-
-.btn-logout:active {
-  transform: translateY(0);
-}
-
-.logout-icon {
-  font-size: 16px;
-}
-
-.page-content {
-  width: 100%;
-  height: 100%;
-  padding-top: 60px;
-  overflow-y: auto;
-}
-
-.loading-container {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  color: #666;
-}
-
-.loading-spinner {
-  width: 40px;
-  height: 40px;
-  border: 4px solid #f3f3f3;
-  border-top: 4px solid #667eea;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-  margin-bottom: 20px;
-}
-
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
-}
-
-@media (max-width: 768px) {
-  .nav-item {
-    padding: 12px 15px;
-    font-size: 16px;
-  }
-  
-  .nav-user {
-    gap: 10px;
-  }
-  
-  .user-email {
-    font-size: 12px;
-  }
-  
-  .btn-logout {
-    padding: 6px 12px;
-    font-size: 12px;
-  }
-}
+:root { --ink:#16201d; --muted:#66736f; --cream:#f5f2ea; --paper:#fffdf8; --green:#174f42; --lime:#c8f560; --line:#dcded5; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--cream); color:var(--ink); font-family:Inter, "PingFang SC", "Microsoft YaHei", sans-serif; }
+button,input,textarea { font:inherit; }
+button { color:inherit; }
+.app-shell { min-height:100vh; }
+.topbar { height:74px; padding:0 4vw; display:flex; align-items:center; justify-content:space-between; position:fixed; inset:0 0 auto; z-index:100; background:rgba(245,242,234,.92); border-bottom:1px solid var(--line); backdrop-filter:blur(18px); }
+.brand { display:flex; align-items:center; gap:10px; border:0; background:none; cursor:pointer; text-align:left; }
+.brand-mark { width:38px;height:38px;display:grid;place-items:center;background:var(--green);color:var(--lime);border-radius:12px;font-family:Georgia;font-size:22px; }
+.brand b { display:block;font-size:12px;letter-spacing:1.8px; }.brand small{display:block;color:var(--muted);font-size:11px;margin-top:2px}
+.topbar nav { display:flex;gap:2px; }
+.topbar nav button { border:0;background:none;padding:10px 12px;border-radius:9px;cursor:pointer;color:var(--muted);font-size:14px; }
+.topbar nav button span { margin-right:5px }.topbar nav button:hover,.topbar nav button.active{background:#e5e9de;color:var(--green)}
+.account-actions { display:flex;align-items:center;gap:8px }.login-btn{border:0;background:var(--green);color:white;padding:9px 18px;border-radius:999px;cursor:pointer}.avatar{border:0;width:36px;height:36px;border-radius:50%;background:var(--lime);cursor:pointer;font-weight:800}.menu-btn{display:none;border:0;background:none;font-size:22px}
+.page-content { padding-top:74px;min-height:100vh; }
+.loading-screen{height:calc(100vh - 74px);display:grid;place-content:center;text-align:center;color:var(--muted)}.loading-screen span{width:34px;height:34px;border:3px solid #d4d9cc;border-top-color:var(--green);border-radius:50%;animation:spin 1s linear infinite;margin:auto}@keyframes spin{to{transform:rotate(360deg)}}
+.page-wrap{max-width:1180px;margin:auto;padding:48px 24px 80px}.eyebrow{font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--green);font-weight:800}.page-title{font-family:Georgia,"Songti SC",serif;font-size:clamp(38px,5vw,68px);line-height:1.04;margin:10px 0 14px;letter-spacing:-2px}.page-lead{color:var(--muted);font-size:17px;max-width:650px;line-height:1.8}
+.pill{border:1px solid var(--line);background:var(--paper);padding:8px 14px;border-radius:999px;cursor:pointer}.pill.active{background:var(--green);color:white;border-color:var(--green)}
+@media(max-width:900px){.menu-btn{display:block}.topbar nav{display:none;position:absolute;top:74px;left:0;right:0;padding:12px;background:var(--paper);border-bottom:1px solid var(--line);grid-template-columns:repeat(2,1fr)}.topbar nav.open{display:grid}.topbar nav button{text-align:left}.brand small{display:none}.page-wrap{padding:32px 18px 60px}}
 </style>

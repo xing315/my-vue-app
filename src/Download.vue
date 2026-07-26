@@ -1,6 +1,13 @@
 <script>
+import phoneImage from './assets/phone.png'
+
 export default {
-  name: 'Download'
+  name: 'Download',
+  data() {
+    return {
+      phoneImage
+    }
+  }
 }
 </script>
 
@@ -9,7 +16,7 @@ export default {
     <div class="content">
       <div class="qrcode-container">
         <img 
-          src="/images/phone.png" 
+          :src="phoneImage" 
           alt="扫码下载APP" 
           class="qrcode-image"
         />
