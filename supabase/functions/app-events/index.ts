@@ -1,4 +1,6 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+// Setup type definitions for built-in Supabase Runtime APIs
+import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
+import { withSupabase } from 'jsr:@supabase/server@^1'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -23,25 +25,26 @@ const timestamp = (value: unknown) => {
     ? new Date(parsed).toISOString() : null
 }
 
-Deno.serve(async request => {
-  if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
-  if (request.method !== 'POST') {
-    return Response.json({ error: 'method_not_allowed' }, { status: 405, headers: corsHeaders })
-  }
-  if (Number(request.headers.get('content-length') || 0) > 1_000_000) {
-    return Response.json({ error: 'payload_too_large' }, { status: 413, headers: corsHeaders })
-  }
-  const ingestKey = Deno.env.get('APP_TELEMETRY_INGEST_KEY')
-  if (ingestKey && request.headers.get('x-ingest-key') !== ingestKey) {
-    return Response.json({ error: 'unauthorized' }, { status: 401, headers: corsHeaders })
-  }
-
-  try {
-    const payload = await request.json()
-    const items = Array.isArray(payload) ? payload : payload?.events
-    if (!Array.isArray(items) || items.length === 0 || items.length > 500) {
-      return Response.json({ error: 'events_must_be_an_array_of_1_to_500_items' }, { status: 400, headers: corsHeaders })
+export default {
+  fetch: withSupabase({ auth: 'none' }, async (request, context) => {
+    if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+    if (request.method !== 'POST') {
+      return Response.json({ error: 'method_not_allowed' }, { status: 405, headers: corsHeaders })
     }
+    if (Number(request.headers.get('content-length') || 0) > 1_000_000) {
+      return Response.json({ error: 'payload_too_large' }, { status: 413, headers: corsHeaders })
+    }
+    const ingestKey = Deno.env.get('APP_TELEMETRY_INGEST_KEY')
+    if (ingestKey && request.headers.get('x-ingest-key') !== ingestKey) {
+      return Response.json({ error: 'unauthorized' }, { status: 401, headers: corsHeaders })
+    }
+
+    try {
+      const payload = await request.json()
+      const items = Array.isArray(payload) ? payload : payload?.events
+      if (!Array.isArray(items) || items.length === 0 || items.length > 500) {
+        return Response.json({ error: 'events_must_be_an_array_of_1_to_500_items' }, { status: 400, headers: corsHeaders })
+      }
 
     const headerAppId = text(request.headers.get('x-app-id'), 150) || 'com.example.mystudy'
     const headerAppVersion = text(request.headers.get('x-app-version'), 50)
@@ -84,23 +87,21 @@ Deno.serve(async request => {
       }
     })
 
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-      { auth: { persistSession: false } }
-    )
-    const { error } = await supabase.from('app_telemetry_events').insert(rows)
-    if (error) throw error
-    return Response.json(
-      { accepted: rows.length, batchId, receivedAt: new Date().toISOString() },
-      { status: 202, headers: { ...corsHeaders, 'Cache-Control': 'no-store' } }
-    )
-  } catch (error) {
-    const invalid = error instanceof Error && error.message.startsWith('invalid_event_')
-    console.error('app-events ingestion failed', error)
-    return Response.json(
-      { error: invalid ? error.message : 'ingestion_failed' },
-      { status: invalid ? 400 : 500, headers: corsHeaders }
-    )
-  }
-})
+      const { error } = await context.supabaseAdmin
+        .from('app_telemetry_events')
+        .insert(rows)
+      if (error) throw error
+      return Response.json(
+        { accepted: rows.length, batchId, receivedAt: new Date().toISOString() },
+        { status: 202, headers: { ...corsHeaders, 'Cache-Control': 'no-store' } }
+      )
+    } catch (error) {
+      const invalid = error instanceof Error && error.message.startsWith('invalid_event_')
+      console.error('app-events ingestion failed', error)
+      return Response.json(
+        { error: invalid ? error.message : 'ingestion_failed' },
+        { status: invalid ? 400 : 500, headers: corsHeaders }
+      )
+    }
+  })
+}

@@ -21,7 +21,7 @@ export default {
         { id: 'home', label: '首页', icon: '⌂' },
         { id: 'blog', label: '博客', icon: '✦' },
         { id: 'news', label: '资讯', icon: '◫' },
-        { id: 'analytics', label: '数据', icon: '⌁' },
+        { id: 'analytics', label: 'App 观测', icon: '⌁' },
         { id: 'toolkit', label: '工具', icon: '◇' },
         { id: 'accounting', label: '记账', icon: '¥' },
         { id: 'download', label: '下载', icon: '↓' }
