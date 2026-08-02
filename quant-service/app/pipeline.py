@@ -8,6 +8,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
+from collections import defaultdict
 
 from .indicators import dimension_scores, history_features
 from .providers import AkshareProvider, BaoStockProvider, latest_expected_report_day
@@ -70,22 +71,43 @@ def collect(data_root: Path, limit: int | None = None) -> Path:
         financial_source = "Sina" if not financial.empty else "unavailable"
     spot.to_parquet(raw / "spot.parquet", index=False)
     financial.to_parquet(raw / "financial.parquet", index=False)
-    symbols = spot.code.tolist(); end = date.today(); start = end - timedelta(days=900)
+    symbols = spot.code.tolist(); end = date.today(); default_start = end - timedelta(days=900)
+    groups=defaultdict(list); cached_count=0
+    for symbol in symbols:
+        path=history_dir/f"{symbol}.parquet"; symbol_start=default_start
+        if path.exists():
+            try:
+                cached=pd.read_parquet(path,columns=["date"])
+                last=pd.to_datetime(cached["date"],errors="coerce").max()
+                if pd.notna(last): symbol_start=last.date()+timedelta(days=1)
+            except Exception: pass
+        if symbol_start<=end: groups[symbol_start].append(symbol)
+        else: cached_count+=1
+    def grouped(iterator_factory):
+        for group_start,group_symbols in groups.items():
+            yield from iterator_factory(group_symbols,group_start,end)
     def save_histories(iterator, source):
-        failed=[]; succeeded=0
+        failed=[]; succeeded=cached_count
         for idx, (symbol, frame, error) in enumerate(iterator, 1):
             if error or frame.empty: failed.append({"code":symbol,"error":error or "empty"})
             else:
-                frame.to_parquet(history_dir / f"{symbol}.parquet",index=False); succeeded += 1
-            if idx % 100 == 0 or idx == len(symbols): print(f"{source} history {idx}/{len(symbols)}", flush=True)
+                path=history_dir/f"{symbol}.parquet"
+                if path.exists():
+                    old=pd.read_parquet(path); frame=pd.concat([old,frame],ignore_index=True)
+                    if "date" in frame: frame=frame.drop_duplicates("date",keep="last").sort_values("date")
+                frame.to_parquet(path,index=False); succeeded += 1
+            if idx % 100 == 0 or idx == sum(map(len,groups.values())): print(f"{source} history {idx}/{sum(map(len,groups.values()))} (+{cached_count} cached)", flush=True)
         return succeeded, failed
-    try:
-        history_source = "BaoStock"
-        succeeded, failures = save_histories(provider.history_many(symbols,start,end), history_source)
-    except Exception as exc:
-        print(f"BaoStock 历史行情不可用，切换新浪: {type(exc).__name__}", flush=True)
-        history_source = "Sina"
-        succeeded, failures = save_histories(ak.history_many_sina(symbols,start,end), history_source)
+    if not groups:
+        history_source="local-cache"; succeeded=cached_count; failures=[]
+    else:
+        try:
+            history_source = "BaoStock"
+            succeeded, failures = save_histories(grouped(provider.history_many), history_source)
+        except Exception as exc:
+            print(f"BaoStock 历史行情不可用，切换新浪: {type(exc).__name__}", flush=True)
+            history_source = "Sina"
+            succeeded, failures = save_histories(grouped(ak.history_many_sina), history_source)
     if succeeded == 0:
         raise ConnectionError("两个历史行情源均不可用，未发布评分快照")
     (raw / "collection-meta.json").write_text(json.dumps({"collectedAt":datetime.now(TZ).isoformat(),"reportDate":report_day,"symbols":len(symbols),"failures":failures,"spotSource":spot_source,"financialSource":financial_source,"historySource":history_source},ensure_ascii=False,indent=2),encoding="utf-8")
@@ -136,15 +158,31 @@ def build(data_root: Path, min_coverage: float = .75) -> Path:
       "sources":[{"name":meta.get("historySource","历史行情"),"state":"ready","detail":f"复权日线覆盖 {coverage:.1%}"},{"name":meta.get("financialSource","财务数据"),"state":"ready","detail":f"行情来源 {meta.get('spotSource','unknown')}"},{"name":"数据质量","state":"ready","detail":f"已评分 {len(published)} 只"}]}
     temp=data_root/"latest-dashboard.json.tmp"; target=data_root/"latest-dashboard.json"
     temp.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8"); os.replace(temp,target)
+    from .local_db import update_database
+    db_result=update_database(data_root,payload,meta)
     print(f"published {target}: {len(published)} scored, {len(eligible)} eligible")
+    print(f"DuckDB updated: {db_result}",flush=True)
     return target
 
 def main():
     parser=argparse.ArgumentParser(description="A股盘后数据与评分流水线")
-    parser.add_argument("command",choices=["collect","build","all"]); parser.add_argument("--data-root",default="data")
+    parser.add_argument("command",choices=["collect","build","db-init","publish","all"]); parser.add_argument("--data-root",default="data")
     parser.add_argument("--limit",type=int); parser.add_argument("--min-coverage",type=float,default=.75)
     args=parser.parse_args(); root=Path(args.data_root)
     if args.command in ("collect","all"): collect(root,args.limit)
     if args.command in ("build","all"): build(root,args.min_coverage)
+    if args.command == "db-init":
+        from .local_db import connect_database
+        db=connect_database(root)
+        print(db.execute("select count(*) from daily_bars").fetchone()[0] if "daily_bars" in [r[0] for r in db.execute("show tables").fetchall()] else 0)
+        db.close()
+    if args.command in ("publish","all"):
+        if os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
+            from .publisher import publish_file
+            print(publish_file(root/"latest-dashboard.json"), flush=True)
+        elif args.command == "publish":
+            raise RuntimeError("发布需要 SUPABASE_URL 和 SUPABASE_SERVICE_ROLE_KEY")
+        else:
+            print("未配置 Supabase service_role，跳过线上发布", flush=True)
 
 if __name__ == "__main__": main()

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.zhangspace.quant-sync</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/zsh</string><string>/Users/zhx/Documents/my-vue-app/quant-service/sync_daily.sh</string></array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>16</integer><key>Minute</key><integer>45</integer></dict>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/Users/zhx/Documents/my-vue-app/quant-service/data/logs/launchd.log</string>
+  <key>StandardErrorPath</key><string>/Users/zhx/Documents/my-vue-app/quant-service/data/logs/launchd-error.log</string>
+</dict>
+</plist>

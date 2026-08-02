@@ -1,4 +1,6 @@
 <script>
+import { supabase } from './supabase.js'
+
 const DEMO = {
   mode: 'demo', updatedAt: '2026-08-01T15:30:00+08:00', modelVersion: 'cn-equity-v1.0',
   market: { indices: [{name:'上证指数',value:'3,559.95',change:0.42},{name:'沪深300',value:'4,181.73',change:0.31},{name:'中证500',value:'6,442.18',change:-0.18}], breadth: 56, valuation: 47, risk: '中性' },
@@ -16,7 +18,7 @@ const DEMO = {
 
 export default {
   props: { user: Object },
-  data: () => ({ data:null, loading:true, query:'', industry:'all', minScore:0, selected:null, budget:100000, holdings:[], form:{code:'',name:'',cost:'',shares:''}, tab:'candidates', error:'', demo:false }),
+  data: () => ({ data:null, loading:true, query:'', industry:'all', minScore:0, selected:null, budget:100000, holdings:[], form:{code:'',name:'',cost:'',shares:''}, tab:'candidates', error:'', demo:false, coverageCount:0 }),
   computed: {
     stocks() { return this.data?.stocks || [] },
     industries() { return [...new Set(this.stocks.map(s=>s.industry))] },
@@ -30,7 +32,36 @@ export default {
   },
   mounted() { this.load(); try { this.holdings=JSON.parse(localStorage.getItem('quant-holdings')||'[]') } catch {} },
   methods: {
-    async load() { this.loading=true; this.error=''; try { const r=await fetch('/api/quant/dashboard'); if(!r.ok) throw new Error(`HTTP ${r.status}`); const payload=await r.json(); if(payload.mode!=='live') throw new Error('尚未生成真实盘后快照'); this.data=payload; this.demo=false } catch(e) { this.data=DEMO; this.demo=true; this.error=`${e.message||'分析服务未连接'}，当前为演示快照，不可用于真实投资决策。` } finally { this.loading=false } },
+    async loadSupabase() {
+      const { data:snapshots, error:snapshotError } = await supabase.from('quant_market_snapshots')
+        .select('trade_date,updated_at,model_version,coverage_count,eligible_count,market,validation,sources')
+        .order('trade_date',{ascending:false}).limit(1)
+      if (snapshotError) throw snapshotError
+      const snapshot=snapshots?.[0]
+      if (!snapshot) throw new Error('Supabase 尚无已发布的量化快照')
+      const { data:rows, error:scoresError } = await supabase.from('quant_latest_scores')
+        .select('symbol,name,industry,score,confidence,price,change_percent,position_min,position_max,excluded,detail,trade_date')
+        .order('excluded',{ascending:true}).order('score',{ascending:false}).order('confidence',{ascending:false}).limit(1000)
+      if (scoresError) throw scoresError
+      const stocks=(rows||[]).map(row=>({...row.detail,code:row.symbol,name:row.name,industry:row.industry,
+        score:row.score,confidence:row.confidence,price:Number(row.price),change:Number(row.change_percent),
+        position:[row.position_min,row.position_max],flags:row.excluded?(row.detail?.flags||['严格过滤']):(row.detail?.flags||[])}))
+      this.coverageCount=snapshot.coverage_count
+      return {mode:'live',updatedAt:snapshot.updated_at,modelVersion:snapshot.model_version,market:snapshot.market,
+        validation:snapshot.validation,sources:snapshot.sources,stocks}
+    },
+    async load() {
+      this.loading=true; this.error=''
+      try {
+        let payload
+        try { const r=await fetch('/api/quant/dashboard'); if(!r.ok) throw new Error(`API HTTP ${r.status}`); payload=await r.json(); if(payload.mode!=='live') throw new Error('本地 API 无正式快照') }
+        catch { payload=await this.loadSupabase() }
+        this.data=payload; this.coverageCount=this.coverageCount||payload.stocks?.length||0; this.demo=false
+      } catch(e) {
+        this.data=DEMO; this.coverageCount=DEMO.stocks.length; this.demo=true
+        this.error=`${e.message||'分析服务未连接'}，当前为演示快照，不可用于真实投资决策。`
+      } finally { this.loading=false }
+    },
     rating(score) { return score>=80?'重点研究':score>=70?'值得关注':score>=55?'中性观察':score>=40?'谨慎':'回避' },
     tone(score) { return score>=80?'strong':score>=70?'good':score>=55?'neutral':score>=40?'warn':'avoid' },
     money(v) { return Number(v||0).toLocaleString('zh-CN',{style:'currency',currency:'CNY',maximumFractionDigits:0}) },
@@ -58,7 +89,7 @@ export default {
         <article v-for="i in data.market.indices" :key="i.name"><span>{{ i.name }}</span><b>{{ i.value }}</b><em :class="i.change>=0?'up':'down'">{{ i.change>=0?'+':'' }}{{ i.change }}%</em></article>
         <article class="breadth"><span>上涨宽度</span><b>{{ data.market.breadth }}%</b><div><i :style="breadthStyle"></i></div><small>市场风险：{{ data.market.risk }}</small></article>
       </section>
-      <section class="section-head"><div><span>DAILY SCREEN</span><h2>全 A 股盘后筛选</h2></div><p>已覆盖 {{ stocks.length }} 只 · 列表最多展示 200 只。</p></section>
+      <section class="section-head"><div><span>DAILY SCREEN</span><h2>全 A 股盘后筛选</h2></div><p>已覆盖 {{ coverageCount }} 只 · 线上加载高排名候选，列表最多展示 200 只。</p></section>
       <div class="filters"><input v-model="query" placeholder="搜索代码或名称"><select v-model="industry"><option value="all">全部行业</option><option v-for="i in industries" :key="i">{{ i }}</option></select><label>最低评分 <input type="range" v-model.number="minScore" min="0" max="90" step="5"><b>{{ minScore }}</b></label></div>
       <section class="stock-table">
         <div class="s-row s-head"><span>标的</span><span>评级</span><span>最新价</span><span>核心证据</span><span>建议仓位</span><span></span></div>

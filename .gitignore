@@ -45,3 +45,4 @@ quant-service/.venv/
 quant-service/data/
 quant-service/**/__pycache__/
 quant-service/.pytest_cache/
+quant-service/.env

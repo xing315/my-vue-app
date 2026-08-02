@@ -24,3 +24,17 @@ chmod +x run_pipeline.sh run_server.sh
 `QUANT_USE_SYSTEM_PROXY=1` 后再运行。
 
 Vite 将 `/api/quant` 代理至本服务。生产环境应由反向代理转发同一路径，并用定时任务在交易日收盘后运行 `./run_pipeline.sh`。
+
+### Supabase 发布与 Mac 定时任务
+
+1. 在 Supabase 执行项目迁移。
+2. 复制 `.env.example` 为 `.env`，填入 `SUPABASE_URL` 和仅保存在 Mac 上的 Supabase Secret key（环境变量名继续使用 `SUPABASE_SERVICE_ROLE_KEY`）。
+3. 执行 `./run_pipeline.sh`，校验通过的全市场快照会自动批量发布到 Supabase。
+4. 执行 `./install_launch_agent.sh` 安装每日 16:45 任务。
+
+日常同步会读取本地 Parquet 的最后交易日，只下载缺失日期。同步日志位于 `data/logs/`。
+
+### DuckDB
+
+`npm run quant:db:init` 会创建 `data/quant.duckdb`。`daily_bars`、`latest_spot`和
+`latest_financial` 是直接读取 Parquet 的视图；股票信息、每日评分、同步记录和回测元数据保存在 DuckDB 实体表中。每次 `quant:sync` 会自动更新这些表。
