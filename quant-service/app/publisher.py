@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -23,14 +24,22 @@ class SupabasePublisher:
         # also require the bearer header to assume the service_role database role.
         if not service_key.startswith("sb_secret_"):
             headers["Authorization"] = f"Bearer {service_key}"
-        self.client = httpx.Client(timeout=60, headers=headers)
+        self.client = httpx.Client(timeout=60, headers=headers, trust_env=False)
 
     def _upload(self, bucket: str, object_path: str, content: bytes):
-        response = self.client.post(
-            f"{self.origin}/storage/v1/object/{bucket}/{object_path}",
-            headers={"Content-Type": "application/gzip", "x-upsert": "true"}, content=content,
-        )
-        response.raise_for_status()
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = self.client.post(
+                    f"{self.origin}/storage/v1/object/{bucket}/{object_path}",
+                    headers={"Content-Type": "application/gzip", "x-upsert": "true"}, content=content,
+                )
+                response.raise_for_status()
+                return
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                last_error = exc
+                if attempt < 2: time.sleep(attempt + 1)
+        raise last_error
 
     def _ensure_chart_bucket(self):
         body = {"id": "quant-stock-charts", "name": "quant-stock-charts", "public": True,
@@ -80,6 +89,23 @@ class SupabasePublisher:
             "eligible_count": eligible, "market": payload.get("market", {}),
             "validation": payload.get("validation", {}), "sources": payload.get("sources", []),
         }], "trade_date")
+        recommendations = []
+        for item in payload.get("recommendations", []):
+            position = item.get("position") or [0, 0]
+            recommendations.append({"trade_date": trade_date, "rank": item["rank"], "symbol": item["code"],
+                "name": item["name"], "industry": item.get("industry") or "未分类", "score": item["score"],
+                "confidence": item["confidence"], "previous_rank": item.get("previousRank"),
+                "rank_change": item.get("rankChange"), "price": item.get("price"),
+                "change_percent": item.get("change"), "position_min": position[0], "position_max": position[1],
+                "explanation": item.get("explanation") or {}, "model_version": payload["modelVersion"],
+                "experimental": True})
+        if recommendations:
+            try:
+                self._upsert("quant_daily_recommendations", recommendations, "trade_date,rank,model_version")
+                print(f"Supabase recommendations {len(recommendations)}/{len(recommendations)}", flush=True)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 404: raise
+                print("Supabase 推荐历史表尚未迁移，最新推荐已随 scores.detail 发布", flush=True)
         chart_bytes = 0
         if data_root is not None:
             from .chart_shards import build_chart_shards

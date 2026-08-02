@@ -10,6 +10,7 @@
     "dev": "vite",
     "quant:sync": "./quant-service/run_pipeline.sh",
     "quant:db:init": "cd quant-service && .venv/bin/python -m app.pipeline db-init",
+    "quant:deepseek:configure": "sh ./quant-service/configure_deepseek.sh",
     "quant:server": "./quant-service/run_server.sh",
     "build": "vite build",
     "preview": "vite preview"

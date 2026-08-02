@@ -15,7 +15,7 @@ from .providers import AkshareProvider, BaoStockProvider, latest_expected_report
 from .scoring import score_stock, suggested_position
 
 TZ = ZoneInfo("Asia/Shanghai")
-MODEL_VERSION = "cn-equity-v1.0"
+MODEL_VERSION = "cn-equity-v1.1"
 
 def configure_network():
     """Public data endpoints often fail through a macOS HTTP proxy.
@@ -143,8 +143,14 @@ def build(data_root: Path, min_coverage: float = .75) -> Path:
         reason,counter=reasons(row)
         industry=getattr(row,"industry",None)
         if not isinstance(industry,str) or not industry.strip(): industry="未分类"
+        metrics={"roe":finite(getattr(row,"roe",None)),"grossMargin":finite(getattr(row,"gross_margin",None)),
+          "revenueGrowth":finite(getattr(row,"revenue_growth",None)),"profitGrowth":finite(getattr(row,"profit_growth",None)),
+          "cashflowPerShare":finite(getattr(row,"cashflow_ps",None)),"return1y":finite(getattr(row,"return_1y",None)),
+          "maxDrawdown":finite(getattr(row,"max_drawdown",None)),"volatility":finite(getattr(row,"volatility",None)),
+          "averageAmount20":finite(getattr(row,"avg_amount_20",None))}
         published.append({"code":row.code,"name":name,"industry":industry,"price":finite(row.price,0),"change":finite(getattr(row,"change",0),0),"score":result.score,"confidence":result.confidence,
           "quality":round(dims["quality"]*25),"growth":round(dims["growth"]*20),"valuation":round(dims["valuation"]*20),"trend":round(dims["trend"]*15),"risk":round(dims["risk"]*10),"liquidity":round(dims["liquidity"]*10),"position":list(pos),"pe":finite(getattr(row,"pe",None)),"pb":finite(getattr(row,"pb",None)),"reportDate":str(getattr(row,"report_date","")),"reason":reason,"counter":counter,"flags":exclusions})
+        published[-1]["metrics"] = metrics
     published.sort(key=lambda x:(x["score"],x["confidence"]),reverse=True)
     eligible=[s for s in published if not s["flags"]]
     changes=pd.to_numeric(spot.change,errors="coerce")
@@ -156,10 +162,17 @@ def build(data_root: Path, min_coverage: float = .75) -> Path:
       "stocks":published,
       "validation":{"annualReturn":0,"maxDrawdown":0,"winRate":0,"excessReturn":0,"period":"滚动回测待生成"},
       "sources":[{"name":meta.get("historySource","历史行情"),"state":"ready","detail":f"复权日线覆盖 {coverage:.1%}"},{"name":meta.get("financialSource","财务数据"),"state":"ready","detail":f"行情来源 {meta.get('spotSource','unknown')}"},{"name":"数据质量","state":"ready","detail":f"已评分 {len(published)} 只"}]}
+    from .recommendations import build_recommendations
+    payload["recommendations"] = build_recommendations(data_root, payload)
     temp=data_root/"latest-dashboard.json.tmp"; target=data_root/"latest-dashboard.json"
     temp.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8"); os.replace(temp,target)
     from .local_db import update_database
-    db_result=update_database(data_root,payload,meta)
+    try:
+        db_result=update_database(data_root,payload,meta)
+    except Exception as exc:
+        if "Conflicting lock" not in str(exc): raise
+        db_result={"status":"skipped","reason":"DuckDB 正被 DBeaver 占用"}
+        print("DuckDB 正被 DBeaver 占用，本次跳过本地表写入；JSON 与线上发布继续",flush=True)
     print(f"published {target}: {len(published)} scored, {len(eligible)} eligible")
     print(f"DuckDB updated: {db_result}",flush=True)
     return target

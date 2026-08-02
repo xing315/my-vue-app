@@ -36,6 +36,12 @@ create table if not exists backtest_runs (
   started_at timestamptz, completed_at timestamptz, parameters json,
   annual_return double, max_drawdown double, win_rate double, result json
 );
+create table if not exists daily_recommendations (
+  trade_date date, rank smallint, symbol varchar, model_version varchar,
+  previous_rank smallint, rank_change smallint, score smallint, confidence smallint,
+  industry varchar, explanation json, experimental boolean, created_at timestamptz,
+  primary key (trade_date, rank, model_version)
+);
 """
 
 
@@ -78,6 +84,11 @@ def update_database(data_root: Path, payload: dict, collection_meta: dict) -> di
                 stock["score"],stock["confidence"],_rating(stock["score"]),stock.get("quality",0),stock.get("growth",0),
                 stock.get("valuation",0),stock.get("trend",0),stock.get("risk",0),stock.get("liquidity",0),
                 bool(stock.get("flags")),json.dumps(stock,ensure_ascii=False),updated_at])
+        for item in payload.get("recommendations", []):
+            db.execute("""insert or replace into daily_recommendations values
+                (?,?,?,?,?,?,?,?,?,?,?,?)""", [trade_date,item["rank"],item["code"],payload["modelVersion"],
+                item.get("previousRank"),item.get("rankChange"),item["score"],item["confidence"],item["industry"],
+                json.dumps(item.get("explanation",{}),ensure_ascii=False),True,updated_at])
         expected = int(collection_meta.get("symbols", len(stocks)))
         coverage = (expected-len(failures))/expected if expected else 0
         db.execute("""insert into sync_runs values (?,?,?,?,?,?,?,?,?,?,?)""", [run_id,
