@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import html
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -25,6 +26,36 @@ def _live_quotes() -> list[dict]:
 
 @app.get("/health")
 def health(): return {"status": "ok", "time": _now()}
+
+def _news_category(text: str) -> str:
+    if any(word in text for word in ("央行", "利率", "通胀", "经济", "财政", "汇率", "GDP")): return "宏观"
+    if any(word in text for word in ("科技", "芯片", "人工智能", "AI", "半导体", "软件")): return "科技"
+    if any(word in text for word in ("公司", "集团", "业绩", "营收", "利润", "收购")): return "公司"
+    return "市场"
+
+@app.get("/api/quant/news")
+def financial_news():
+    """Fetch real financial wires on every request; never return demo stories."""
+    import akshare as ak
+    items, source = [], ""
+    try:
+        frame = ak.stock_info_global_em().head(80); source = "东方财富财经快讯"
+        for row in frame.to_dict("records"):
+            title = str(row.get("标题") or "").strip()
+            if title:
+                items.append({"id": str(row.get("链接") or title), "title": title,
+                    "summary": str(row.get("摘要") or "").strip(), "publishedAt": str(row.get("发布时间") or ""),
+                    "source": source, "url": str(row.get("链接") or ""), "category": _news_category(title)})
+    except Exception:
+        frame = ak.stock_info_global_sina().head(50); source = "新浪财经7×24"
+        for row in frame.to_dict("records"):
+            text = re.sub(r"<[^>]+>", "", html.unescape(str(row.get("内容") or ""))).strip()
+            if text:
+                items.append({"id": f"sina-{row.get('时间')}-{len(items)}", "title": text[:100],
+                    "summary": text[100:], "publishedAt": str(row.get("时间") or ""), "source": source,
+                    "url": "https://finance.sina.com.cn/7x24/", "category": _news_category(text)})
+    if not items: raise HTTPException(status_code=503, detail="实时财经新闻源暂时不可用")
+    return {"mode":"live","fetchedAt":_now(),"source":source,"items":items}
 
 @app.get("/api/quant/dashboard")
 def dashboard():

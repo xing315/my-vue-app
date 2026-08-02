@@ -119,7 +119,7 @@ export default {
       this.loading=true; this.error=''
       try {
         let payload
-        try { const r=await fetch('/api/quant/dashboard'); if(!r.ok) throw new Error(`API HTTP ${r.status}`); payload=await r.json(); if(payload.mode!=='live') throw new Error('本地 API 无正式快照') }
+        try { const r=await fetch('/api/quant/dashboard',{signal:AbortSignal.timeout(4000)}); if(!r.ok) throw new Error(`API HTTP ${r.status}`); payload=await r.json(); if(payload.mode!=='live') throw new Error('本地 API 无正式快照') }
         catch { payload=await this.loadSupabase() }
         this.data=payload; this.coverageCount=this.coverageCount||payload.stocks?.length||0; this.demo=false
       } catch(e) {
@@ -142,7 +142,7 @@ export default {
       this.selected=s; this.tab='detail'; this.stockDetail=null; this.detailError=''; this.detailLoading=true
       window.scrollTo({top:0,behavior:'smooth'})
       try {
-        const response=await fetch(`/api/quant/stocks/${s.code}`)
+        const response=await fetch(`/api/quant/stocks/${s.code}`,{signal:AbortSignal.timeout(4000)})
         if(!response.ok) throw new Error(`详情接口 HTTP ${response.status}`)
         this.stockDetail=await response.json()
       } catch(localError) {

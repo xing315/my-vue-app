@@ -3,3 +3,6 @@ verify_jwt = true
 
 [functions.app-events]
 verify_jwt = false
+
+[functions.financial-news]
+verify_jwt = false

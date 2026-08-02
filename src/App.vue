@@ -28,7 +28,15 @@ export default {
       ]
     }
   },
-  mounted() { this.initializeAuth() },
+  mounted() {
+    const knownPages = [...this.nav.map(item => item.id), 'accounting', 'auth', 'download']
+    const statePage = window.history.state?.page
+    if (knownPages.includes(statePage)) this.currentPage = statePage
+    else window.history.replaceState({ page: this.currentPage }, '', window.location.href)
+    window.addEventListener('popstate', this.handlePopState)
+    this.initializeAuth()
+  },
+  beforeUnmount() { window.removeEventListener('popstate', this.handlePopState) },
   methods: {
     async initializeAuth() {
       try {
@@ -40,17 +48,29 @@ export default {
       } finally { this.loading = false }
     },
     navigateTo(page) {
-      if (page === 'accounting' && !this.user) { this.currentPage = 'auth' }
-      else this.currentPage = page
+      const target = page === 'accounting' && !this.user ? 'auth' : page
+      if (target !== this.currentPage) {
+        window.history.pushState({ page: target, from: this.currentPage }, '', window.location.href)
+        this.currentPage = target
+      }
       this.mobileOpen = false
       document.querySelector('.page-content')?.scrollTo(0, 0)
     },
-    handleAuthSuccess(user) { this.user = user; this.currentPage = 'home' },
+    handlePopState(event) {
+      this.currentPage = event.state?.page || 'home'
+      this.mobileOpen = false
+      document.querySelector('.page-content')?.scrollTo(0, 0)
+    },
+    goBack() {
+      if (window.history.state?.from) window.history.back()
+      else this.navigateTo('home')
+    },
+    handleAuthSuccess(user) { this.user = user; this.navigateTo('home') },
     async logout() {
       if (!confirm('确定要退出登录吗？')) return
       await supabase.auth.signOut()
       this.user = null
-      this.currentPage = 'home'
+      this.navigateTo('home')
     }
   }
 }
@@ -79,7 +99,7 @@ export default {
       <div v-if="loading" class="loading-screen"><span></span><p>正在抵达数字空间…</p></div>
       <Home v-else-if="currentPage === 'home'" @navigate="navigateTo" />
       <Blog v-else-if="currentPage === 'blog'" />
-      <News v-else-if="currentPage === 'news'" />
+      <News v-else-if="currentPage === 'news'" @back="goBack" />
       <Quant v-else-if="currentPage === 'quant'" :user="user" />
       <Analytics v-else-if="currentPage === 'analytics'" />
       <Toolkit v-else-if="currentPage === 'toolkit'" />
