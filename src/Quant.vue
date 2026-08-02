@@ -1,6 +1,32 @@
 <script>
 import { supabase } from './supabase.js'
 
+const chartShardCache = new Map()
+
+function chartStats(bars) {
+  const closes=bars.map(b=>b.close).filter(Number.isFinite)
+  if(!closes.length) return {}
+  let peak=closes[0], maxDrawdown=0
+  const returns=[]
+  for(let i=0;i<closes.length;i++) { peak=Math.max(peak,closes[i]); maxDrawdown=Math.min(maxDrawdown,closes[i]/peak-1); if(i) returns.push(closes[i]/closes[i-1]-1) }
+  const recent=returns.slice(-250), mean=recent.reduce((a,b)=>a+b,0)/Math.max(recent.length,1)
+  const variance=recent.reduce((a,b)=>a+(b-mean)**2,0)/Math.max(recent.length-1,1)
+  const amounts=bars.slice(-20).map(b=>b.amount).filter(Number.isFinite)
+  return {startDate:bars[0].date,endDate:bars.at(-1).date,tradingDays:bars.length,
+    periodReturn:closes.at(-1)/closes[0]-1,return1y:closes.at(-1)/closes[Math.max(0,closes.length-240)]-1,
+    maxDrawdown,annualVolatility:Math.sqrt(variance)*Math.sqrt(250),
+    high:Math.max(...bars.map(b=>b.high).filter(Number.isFinite)),low:Math.min(...bars.map(b=>b.low).filter(Number.isFinite)),
+    averageAmount20:amounts.reduce((a,b)=>a+b,0)/Math.max(amounts.length,1)}
+}
+
+function addMovingAverages(bars) {
+  for(const days of [5,20,60,120,250]) for(let i=0;i<bars.length;i++) {
+    if(i+1<days) bars[i][`ma${days}`]=null
+    else bars[i][`ma${days}`]=bars.slice(i-days+1,i+1).reduce((sum,row)=>sum+row.close,0)/days
+  }
+  return bars
+}
+
 const DEMO = {
   mode: 'demo', updatedAt: '2026-08-01T15:30:00+08:00', modelVersion: 'cn-equity-v1.0',
   market: { indices: [{name:'上证指数',value:'3,559.95',change:0.42},{name:'沪深300',value:'4,181.73',change:0.31},{name:'中证500',value:'6,442.18',change:-0.18}], breadth: 56, valuation: 47, risk: '中性' },
@@ -18,7 +44,7 @@ const DEMO = {
 
 export default {
   props: { user: Object },
-  data: () => ({ data:null, loading:true, query:'', industry:'all', minScore:0, selected:null, budget:100000, holdings:[], form:{code:'',name:'',cost:'',shares:''}, tab:'candidates', error:'', demo:false, coverageCount:0 }),
+  data: () => ({ data:null, loading:true, query:'', industry:'all', minScore:0, selected:null, stockDetail:null, detailLoading:false, detailError:'', chartWindow:120, budget:100000, holdings:[], form:{code:'',name:'',cost:'',shares:''}, tab:'candidates', error:'', demo:false, coverageCount:0 }),
   computed: {
     stocks() { return this.data?.stocks || [] },
     industries() { return [...new Set(this.stocks.map(s=>s.industry))] },
@@ -28,10 +54,42 @@ export default {
     invested() { return this.quantity*(this.selectedStock?.price||0) },
     portfolio() { return this.holdings.map(h=>{ const s=this.stocks.find(x=>x.code===h.code); const price=s?.price||h.cost; return {...h,price,value:price*h.shares,pnl:(price-h.cost)*h.shares,score:s?.score} }) },
     totalValue() { return this.portfolio.reduce((n,h)=>n+h.value,0) },
-    breadthStyle() { return {width:`${this.data?.market.breadth||0}%`} }
+    breadthStyle() { return {width:`${this.data?.market.breadth||0}%`} },
+    latestFinancial() { return this.stockDetail?.financials?.[0] || null },
+    chart() {
+      const rows=(this.stockDetail?.bars||[]).slice(-this.chartWindow)
+      if(!rows.length) return null
+      const numbers=rows.flatMap(r=>[r.low,r.high,r.ma20,r.ma60]).filter(Number.isFinite)
+      const min=Math.min(...numbers), max=Math.max(...numbers), range=Math.max(max-min,.01)
+      const y=v=>285-(v-min)/range*255
+      const step=860/Math.max(rows.length-1,1), width=Math.max(2,Math.min(7,step*.58))
+      const maxVolume=Math.max(...rows.map(r=>Number(r.volume)||0),1)
+      const candles=rows.map((r,i)=>({ ...r,x:20+i*step,w:width,yo:y(r.open),yc:y(r.close),yh:y(r.high),yl:y(r.low),
+        volumeHeight:(Number(r.volume)||0)/maxVolume*55,up:r.close>=r.open }))
+      const line=key=>rows.map((r,i)=>Number.isFinite(r[key])?`${20+i*step},${y(r[key])}`:null).filter(Boolean).join(' ')
+      return {candles,ma20:line('ma20'),ma60:line('ma60'),min,max,first:rows[0].date,last:rows.at(-1).date,
+        periodReturn:rows.at(-1).close/rows[0].close-1}
+    }
   },
   mounted() { this.load(); try { this.holdings=JSON.parse(localStorage.getItem('quant-holdings')||'[]') } catch {} },
   methods: {
+    async loadRemoteDetail(symbol) {
+      const shard=String(Number(symbol)%64).padStart(2,'0')
+      let payload=chartShardCache.get(shard)
+      if(!payload) {
+        const {data}=supabase.storage.from('quant-stock-charts').getPublicUrl(`v1/shard-${shard}.json.gz`)
+        const response=await fetch(data.publicUrl)
+        if(!response.ok) throw new Error(`线上图表 HTTP ${response.status}`)
+        const compressed=await response.arrayBuffer()
+        if(typeof DecompressionStream==='undefined') throw new Error('当前浏览器不支持 gzip 图表解压')
+        const stream=new Blob([compressed]).stream().pipeThrough(new DecompressionStream('gzip'))
+        payload=JSON.parse(await new Response(stream).text()); chartShardCache.set(shard,payload)
+      }
+      const item=payload.stocks?.[symbol]
+      if(!item) throw new Error('线上图表分片中没有该股票')
+      const bars=addMovingAverages(item.b.map(row=>({date:row[0],open:row[1],high:row[2],low:row[3],close:row[4],volume:row[5],amount:row[6]})))
+      return {symbol,bars,financials:item.f?[item.f]:[],stats:chartStats(bars),dataScope:item.scope}
+    },
     async loadSupabase() {
       const { data:snapshots, error:snapshotError } = await supabase.from('quant_market_snapshots')
         .select('trade_date,updated_at,model_version,coverage_count,eligible_count,market,validation,sources')
@@ -65,11 +123,26 @@ export default {
     rating(score) { return score>=80?'重点研究':score>=70?'值得关注':score>=55?'中性观察':score>=40?'谨慎':'回避' },
     tone(score) { return score>=80?'strong':score>=70?'good':score>=55?'neutral':score>=40?'warn':'avoid' },
     money(v) { return Number(v||0).toLocaleString('zh-CN',{style:'currency',currency:'CNY',maximumFractionDigits:0}) },
+    compactMoney(v) { if(v==null) return '—'; return Number(v).toLocaleString('zh-CN',{notation:'compact',maximumFractionDigits:2}) },
+    percent(v) { return v==null?'—':`${v>=0?'+':''}${(Number(v)*100).toFixed(2)}%` },
+    metric(v,suffix='') { return v==null?'—':`${Number(v).toFixed(2)}${suffix}` },
+    exchange(code) { return code?.startsWith('6')?'上海证券交易所':'深圳证券交易所' },
     time(v) { return new Date(v).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) },
     addHolding() { const h={code:this.form.code.trim(),name:this.form.name.trim()||this.form.code.trim(),cost:Number(this.form.cost),shares:Number(this.form.shares)}; if(!h.code||!h.cost||!h.shares) return; this.holdings.push(h); this.save(); this.form={code:'',name:'',cost:'',shares:''} },
     removeHolding(i) { this.holdings.splice(i,1); this.save() },
     save() { localStorage.setItem('quant-holdings',JSON.stringify(this.holdings)) },
-    select(s) { this.selected=s; this.tab='detail'; window.scrollTo({top:0,behavior:'smooth'}) }
+    async select(s) {
+      this.selected=s; this.tab='detail'; this.stockDetail=null; this.detailError=''; this.detailLoading=true
+      window.scrollTo({top:0,behavior:'smooth'})
+      try {
+        const response=await fetch(`/api/quant/stocks/${s.code}`)
+        if(!response.ok) throw new Error(`详情接口 HTTP ${response.status}`)
+        this.stockDetail=await response.json()
+      } catch(localError) {
+        try { this.stockDetail=await this.loadRemoteDetail(s.code) }
+        catch(remoteError) { this.detailError=`个股详情暂时不可用：${remoteError.message}。本地可启动 npm run quant:server 查看。` }
+      } finally { this.detailLoading=false }
+    }
   }
 }
 </script>
@@ -101,6 +174,29 @@ export default {
 
     <template v-else-if="tab==='detail' && selectedStock">
       <section class="detail-hero"><div><span>{{ selectedStock.code }} · {{ selectedStock.industry }}</span><h2>{{ selectedStock.name }}</h2><p>{{ rating(selectedStock.score) }} · 置信度 {{ selectedStock.confidence }}%</p></div><div class="hero-price"><b>¥{{ selectedStock.price.toFixed(2) }}</b><em :class="selectedStock.change>=0?'up':'down'">{{ selectedStock.change>=0?'+':'' }}{{ selectedStock.change }}%</em></div><div class="big-score" :class="tone(selectedStock.score)"><b>{{ selectedStock.score }}</b><span>/ 100</span></div></section>
+      <section class="profile-strip">
+        <div><span>交易所</span><b>{{ exchange(selectedStock.code) }}</b></div><div><span>所属行业</span><b>{{ selectedStock.industry || '暂缺' }}</b></div>
+        <div><span>上市日期</span><b>数据暂未接入</b></div><div><span>行情范围</span><b>{{ stockDetail?.stats?.startDate || '等待本地服务' }} 至 {{ stockDetail?.stats?.endDate || '—' }}</b></div>
+      </section>
+      <section class="panel-q chart-panel">
+        <div class="chart-head"><div><span>PRICE & VOLUME</span><h3>价格趋势与成交量</h3></div><div class="range-buttons"><button v-for="r in [{n:'3月',v:60},{n:'6月',v:120},{n:'1年',v:250},{n:'全部',v:900}]" :key="r.v" :class="{active:chartWindow===r.v}" @click="chartWindow=r.v">{{ r.n }}</button></div></div>
+        <div v-if="detailLoading" class="detail-state">正在读取本地行情…</div>
+        <div v-else-if="detailError" class="detail-state warning">{{ detailError }}</div>
+        <template v-else-if="chart">
+          <div class="chart-summary"><span>图示区间涨跌 <b :class="chart.periodReturn>=0?'up':'down'">{{ percent(chart.periodReturn) }}</b></span><span>近一年 <b :class="stockDetail.stats.return1y>=0?'up':'down'">{{ percent(stockDetail.stats.return1y) }}</b></span><span>全数据最大回撤 <b class="down">{{ percent(stockDetail.stats.maxDrawdown) }}</b></span><span>近一年波动 <b>{{ percent(stockDetail.stats.annualVolatility) }}</b></span></div>
+          <svg class="stock-chart" viewBox="0 0 900 370" preserveAspectRatio="none" role="img" :aria-label="`${selectedStock.name}价格走势`">
+            <line v-for="y in [30,94,158,222,285]" :key="y" x1="20" x2="880" :y1="y" :y2="y" class="grid-line"/>
+            <g v-for="c in chart.candles" :key="c.date"><line :x1="c.x" :x2="c.x" :y1="c.yh" :y2="c.yl" :class="c.up?'c-up':'c-down'"/><rect :x="c.x-c.w/2" :y="Math.min(c.yo,c.yc)" :width="c.w" :height="Math.max(1,Math.abs(c.yc-c.yo))" :class="c.up?'c-up':'c-down'"/><rect :x="c.x-c.w/2" :y="355-c.volumeHeight" :width="c.w" :height="c.volumeHeight" :class="c.up?'v-up':'v-down'"/></g>
+            <polyline v-if="chart.ma20" :points="chart.ma20" class="ma ma20"/><polyline v-if="chart.ma60" :points="chart.ma60" class="ma ma60"/>
+          </svg>
+          <div class="chart-foot"><span>{{ chart.first }}</span><span><i class="legend ma20-dot"></i>MA20 <i class="legend ma60-dot"></i>MA60</span><span>{{ chart.last }}</span></div>
+          <small class="scope-note">{{ stockDetail.dataScope }}。当前涨幅不是“上市以来涨幅”。</small>
+        </template>
+      </section>
+      <section class="detail-grid financial-grid">
+        <article class="panel-q"><span>FINANCIAL SNAPSHOT</span><h3>最新财务指标</h3><div v-if="latestFinancial" class="metric-grid"><p><span>营业收入</span><b>{{ compactMoney(latestFinancial.revenue) }}</b><small :class="latestFinancial.revenueGrowth>=0?'up':'down'">同比 {{ metric(latestFinancial.revenueGrowth,'%') }}</small></p><p><span>归母净利润</span><b>{{ compactMoney(latestFinancial.profit) }}</b><small :class="latestFinancial.profitGrowth>=0?'up':'down'">同比 {{ metric(latestFinancial.profitGrowth,'%') }}</small></p><p><span>ROE</span><b>{{ metric(latestFinancial.roe,'%') }}</b><small>净资产收益率</small></p><p><span>毛利率</span><b>{{ metric(latestFinancial.grossMargin,'%') }}</b><small>销售毛利率</small></p><p><span>每股收益</span><b>{{ metric(latestFinancial.eps) }}</b><small>EPS</small></p><p><span>每股经营现金流</span><b>{{ metric(latestFinancial.cashflowPerShare) }}</b><small>现金质量参考</small></p></div><div v-else class="detail-state">{{ detailLoading?'正在读取财务数据…':'当前数据源暂无可用财务指标' }}</div><footer v-if="latestFinancial">报告期 {{ latestFinancial.reportDate }} · 披露日 {{ latestFinancial.publishDate }}</footer></article>
+        <article class="panel-q"><span>RISK & TRADING</span><h3>行情统计</h3><div class="metric-grid stats" v-if="stockDetail"><p><span>区间最高</span><b>¥{{ metric(stockDetail.stats.high) }}</b></p><p><span>区间最低</span><b>¥{{ metric(stockDetail.stats.low) }}</b></p><p><span>有效交易日</span><b>{{ stockDetail.stats.tradingDays }}</b></p><p><span>近20日平均成交额</span><b>{{ compactMoney(stockDetail.stats.averageAmount20) }}</b></p></div><div v-else class="detail-state">等待本地行情数据</div><p class="notice">完整公司简介、准确上市日期、发行价及上市以来总回报将在补齐公司档案和全历史复权数据后开放。</p></article>
+      </section>
       <section class="detail-grid">
         <article class="panel-q evidence"><span>INVESTMENT CASE</span><h3>结论与反证</h3><div class="positive"><i>+</i><p><b>核心理由</b>{{ selectedStock.reason }}</p></div><div class="negative"><i>!</i><p><b>可能推翻结论</b>{{ selectedStock.counter }}</p></div><footer>财报截止 {{ selectedStock.reportDate }} · 请结合最新公告复核</footer></article>
         <article class="panel-q dimensions"><span>FACTOR SCORE</span><h3>六维得分</h3><div v-for="d in [{n:'财务质量',v:selectedStock.quality,m:25},{n:'成长能力',v:selectedStock.growth,m:20},{n:'估值水平',v:selectedStock.valuation,m:20},{n:'中期趋势',v:selectedStock.trend,m:15},{n:'风险稳定',v:selectedStock.risk,m:10},{n:'流动性',v:selectedStock.liquidity,m:10}]" :key="d.n"><label>{{ d.n }}<b>{{ d.v }}/{{ d.m }}</b></label><p><i :style="{width:`${d.v/d.m*100}%`}"></i></p></div></article>
@@ -130,5 +226,7 @@ export default {
 
 <style scoped>
 .quant-page{max-width:1320px;margin:auto;padding:32px 28px 90px}.demo-banner{display:flex;align-items:center;gap:10px;background:#fff1d2;border:1px solid #edcf88;border-radius:12px;padding:10px 14px;color:#72521a;font-size:12px}.demo-banner b{background:#8b651d;color:white;padding:3px 7px;border-radius:5px}.demo-banner button{margin-left:auto;border:0;background:none;text-decoration:underline;cursor:pointer}.q-hero{display:flex;justify-content:space-between;align-items:flex-end;gap:36px;padding:46px 0 30px}.q-hero h1{font:clamp(42px,6vw,76px)/1 Georgia,"Songti SC";letter-spacing:-3px;margin:10px 0 15px;max-width:760px}.q-hero>div>p:last-child{color:var(--muted);line-height:1.7}.as-of{min-width:250px;background:var(--paper);border:1px solid var(--line);border-radius:16px;padding:15px;display:grid;grid-template-columns:10px 1fr;gap:10px;align-items:center}.as-of>span{width:9px;height:9px;border-radius:50%;background:#4eb66c}.as-of>span.demo{background:#e2a62b}.as-of small,.as-of b{display:block}.as-of small{font-size:10px;color:var(--muted)}.as-of b{font-size:12px;margin-top:3px}.as-of em{grid-column:2;font:10px monospace;color:var(--muted);font-style:normal}.q-tabs{display:flex;border-bottom:1px solid var(--line);margin-bottom:24px}.q-tabs button{border:0;background:none;padding:13px 17px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent}.q-tabs button.active{color:var(--green);border-color:var(--green);font-weight:700}.market-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.market-grid article,.panel-q,.validation-grid article{background:var(--paper);border:1px solid var(--line);border-radius:17px;padding:20px}.market-grid span{display:block;color:var(--muted);font-size:11px}.market-grid b{font:27px Georgia;display:block;margin:13px 0 5px}.market-grid em{font-style:normal;font-size:12px}.up{color:#d44e43!important}.down{color:#168260!important}.breadth div{height:5px;background:#e9e9e1;border-radius:6px;margin:8px 0;overflow:hidden}.breadth i{display:block;height:100%;background:var(--green)}.breadth small{font-size:10px;color:var(--muted)}.section-head{display:flex;justify-content:space-between;align-items:end;padding:42px 0 17px}.section-head span,.panel-q>span{font:700 10px monospace;letter-spacing:1.4px;color:var(--green)}.section-head h2{font:35px Georgia,"Songti SC";margin:6px 0}.section-head p{color:var(--muted);font-size:12px}.filters{display:flex;gap:10px;background:#e8e8df;border-radius:13px;padding:8px;margin-bottom:12px}.filters>input,.filters select{border:0;background:var(--paper);border-radius:9px;padding:10px 12px}.filters>input{min-width:240px}.filters label{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);padding:0 8px}.stock-table{background:var(--paper);border:1px solid var(--line);border-radius:17px;overflow:hidden}.s-row{display:grid;grid-template-columns:1.1fr .9fr .65fr 2.4fr .7fr .65fr;gap:13px;align-items:center;padding:15px 18px;border-top:1px solid #e8e8e1;font-size:12px}.s-row:first-child{border-top:0}.s-row b,.s-row small{display:block}.s-row small{font-size:9px;color:var(--muted);margin-top:5px;line-height:1.4}.s-row>span:nth-child(4)>b{font-weight:500;line-height:1.55}.s-head{background:#f5f4ee;color:var(--muted);font-size:9px;padding-top:10px;padding-bottom:10px}.s-row button{border:1px solid var(--line);background:white;border-radius:8px;padding:7px 9px;cursor:pointer;font-size:10px}.score{display:inline-grid!important;place-content:center;width:37px;height:30px;border-radius:8px;font:700 15px Georgia}.strong{background:#174f42!important;color:#c8f560!important}.good{background:#dff0cb!important;color:#285d31!important}.neutral{background:#e8e6d8!important;color:#5e5c4e!important}.warn{background:#ffe1b8!important;color:#815617!important}.avoid{background:#f4d4d0!important;color:#8c3029!important}.flags{color:#b14a34!important}.empty-q{text-align:center;padding:50px;color:var(--muted)}.detail-hero{display:flex;align-items:center;gap:26px;background:var(--green);color:white;border-radius:22px;padding:28px 32px;margin-top:8px}.detail-hero>div:first-child{margin-right:auto}.detail-hero span{font-size:10px;color:#b9cec7}.detail-hero h2{font:40px Georgia,"Songti SC";margin:6px 0}.detail-hero p{margin:0;color:#d6e1dd}.hero-price{text-align:right}.hero-price b{display:block;font:28px Georgia}.hero-price em{font-style:normal}.big-score{width:100px;height:82px;border-radius:14px;display:grid;place-content:center;text-align:center}.big-score b{font:38px Georgia;line-height:1}.big-score span{font-size:9px}.detail-grid{display:grid;grid-template-columns:1.25fr .75fr;gap:14px;margin-top:14px}.panel-q h3{font:25px Georgia,"Songti SC";margin:6px 0 20px}.positive,.negative{display:flex;gap:12px;border-radius:12px;padding:14px;margin:10px 0}.positive{background:#e7f2df}.negative{background:#fff0dc}.positive i,.negative i{width:24px;height:24px;display:grid;place-content:center;border-radius:50%;font-style:normal;font-weight:bold;background:white}.evidence p{margin:0;line-height:1.65;font-size:12px}.evidence p b{display:block;margin-bottom:4px}.evidence footer{color:var(--muted);font-size:10px;margin-top:17px}.dimensions>div{margin:11px 0}.dimensions label{display:flex;justify-content:space-between;font-size:10px}.dimensions p{height:6px;background:#e9e9e1;border-radius:6px;overflow:hidden;margin:5px 0}.dimensions p i{display:block;height:100%;background:var(--green)}.lower{grid-template-columns:1fr 1fr}.budget>label{display:block;font-size:11px;color:var(--muted)}.budget>label>span{display:flex;align-items:center;border:1px solid var(--line);border-radius:10px;margin-top:7px;background:white}.budget>label b{padding-left:12px}.budget input{border:0;padding:12px;width:100%;outline:0}.budget-results{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:15px 0}.budget-results p,.valuation>div p{background:#f2f1e9;border-radius:10px;padding:12px;margin:0}.budget-results span,.valuation p span{display:block;font-size:9px;color:var(--muted)}.budget-results b,.valuation p b{display:block;font:21px Georgia;margin-top:7px}.budget>small{color:var(--muted);font-size:9px}.valuation>div{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.valuation small{font-size:9px;color:var(--muted)}.valuation .notice{font-size:10px;color:var(--muted);margin:18px 0 0}.holding-form{display:grid;grid-template-columns:1fr 1.3fr 1fr 1fr auto;gap:8px;background:#e8e8df;padding:9px;border-radius:13px}.holding-form input{border:0;border-radius:8px;padding:11px}.holding-form button{border:0;background:var(--green);color:white;border-radius:8px;padding:0 18px}.portfolio-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:12px 0}.portfolio-summary div{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:18px}.portfolio-summary span{display:block;color:var(--muted);font-size:10px}.portfolio-summary b{display:block;font:24px Georgia;margin-top:8px}.p-row{grid-template-columns:1.2fr 1fr .7fr 1fr 1fr .5fr}.remove{color:#a43d35}.validation-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.validation-grid span,.validation-grid small{display:block;color:var(--muted);font-size:10px}.validation-grid b{display:block;font:30px Georgia;margin:15px 0 8px}.source-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0}.source-grid article{display:flex;align-items:center;gap:11px;background:var(--paper);border:1px solid var(--line);border-radius:13px;padding:16px}.source-grid i{width:9px;height:9px;background:#d2a039;border-radius:50%}.source-grid i.ready{background:#54a66b}.source-grid b,.source-grid span{display:block}.source-grid span{font-size:9px;color:var(--muted);margin-top:3px}.source-grid em{margin-left:auto;font-style:normal;font-size:9px}.disclaimer{border:1px solid #e4c98f;background:#fff6e3;border-radius:13px;padding:18px;color:#72521a}.disclaimer p{font-size:11px;line-height:1.7;margin:6px 0 0}.q-loading{height:calc(100vh - 74px);display:grid;place-content:center;text-align:center;color:var(--muted)}
-@media(max-width:900px){.quant-page{padding:22px 16px 60px}.q-hero{align-items:start;flex-direction:column}.as-of{width:100%}.q-tabs{overflow-x:auto}.q-tabs button{white-space:nowrap}.market-grid{grid-template-columns:1fr 1fr}.section-head{align-items:start;flex-direction:column}.filters{flex-wrap:wrap}.filters>input{min-width:0;flex:1}.filters label{width:100%;margin:0}.stock-table{overflow-x:auto}.s-row{min-width:980px}.detail-grid,.lower{grid-template-columns:1fr}.holding-form{grid-template-columns:1fr 1fr}.holding-form button{min-height:42px}.validation-grid{grid-template-columns:1fr 1fr}.source-grid{grid-template-columns:1fr}}@media(max-width:520px){.market-grid,.portfolio-summary,.validation-grid{grid-template-columns:1fr}.q-hero h1{font-size:44px}.detail-hero{align-items:flex-start;flex-wrap:wrap}.big-score{width:80px}.budget-results,.valuation>div{grid-template-columns:1fr}.holding-form{grid-template-columns:1fr}}
+.profile-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;margin:14px 0;background:var(--line);border:1px solid var(--line);border-radius:15px;overflow:hidden}.profile-strip div{background:var(--paper);padding:14px 17px}.profile-strip span,.metric-grid span{display:block;color:var(--muted);font-size:9px}.profile-strip b{display:block;margin-top:6px;font-size:12px}.chart-panel{margin-top:14px}.chart-head{display:flex;justify-content:space-between;align-items:start}.chart-head h3{margin-bottom:4px}.range-buttons{display:flex;background:#eeede6;border-radius:9px;padding:3px}.range-buttons button{border:0;background:transparent;padding:7px 10px;border-radius:7px;font-size:10px;cursor:pointer}.range-buttons button.active{background:white;color:var(--green);font-weight:700}.chart-summary{display:flex;gap:25px;margin:15px 0 8px;font-size:10px;color:var(--muted)}.chart-summary b{display:block;margin-top:4px;font-size:13px;color:#333}.stock-chart{width:100%;height:370px;display:block}.grid-line{stroke:#e7e6df;stroke-width:1}.c-up{fill:#d55349;stroke:#d55349}.c-down{fill:#168260;stroke:#168260}.v-up{fill:#edbbb5}.v-down{fill:#a9d0c5}.ma{fill:none;stroke-width:1.5;vector-effect:non-scaling-stroke}.ma20{stroke:#d29c31}.ma60{stroke:#5676b8}.chart-foot{display:flex;justify-content:space-between;color:var(--muted);font-size:9px}.legend{display:inline-block;width:12px;height:2px;vertical-align:middle;margin:0 4px 2px 10px}.ma20-dot{background:#d29c31}.ma60-dot{background:#5676b8}.scope-note{display:block;margin-top:12px;color:var(--muted);font-size:9px}.detail-state{padding:55px 20px;text-align:center;color:var(--muted);background:#f3f2eb;border-radius:12px;font-size:11px}.detail-state.warning{color:#7b581d;background:#fff3d9}.financial-grid{grid-template-columns:1fr 1fr}.metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.metric-grid p{margin:0;background:#f2f1e9;border-radius:10px;padding:12px}.metric-grid b{display:block;font:19px Georgia;margin:7px 0 4px}.metric-grid small{font-size:9px;color:var(--muted)}.metric-grid.stats{grid-template-columns:1fr 1fr}.financial-grid footer{margin-top:14px;color:var(--muted);font-size:9px}.financial-grid .notice{color:var(--muted);font-size:10px;line-height:1.6;margin-top:16px}
+@media(max-width:900px){.quant-page{padding:22px 16px 60px}.q-hero{align-items:start;flex-direction:column}.as-of{width:100%}.q-tabs{overflow-x:auto}.q-tabs button{white-space:nowrap}.market-grid{grid-template-columns:1fr 1fr}.section-head{align-items:start;flex-direction:column}.filters{flex-wrap:wrap}.filters>input{min-width:0;flex:1}.filters label{width:100%;margin:0}.stock-table{overflow-x:auto}.s-row{min-width:980px}.detail-grid,.lower,.financial-grid{grid-template-columns:1fr}.profile-strip{grid-template-columns:1fr 1fr}.holding-form{grid-template-columns:1fr 1fr}.holding-form button{min-height:42px}.validation-grid{grid-template-columns:1fr 1fr}.source-grid{grid-template-columns:1fr}.stock-chart{height:300px}.chart-summary{flex-wrap:wrap}}
+@media(max-width:520px){.market-grid,.portfolio-summary,.validation-grid,.profile-strip{grid-template-columns:1fr}.q-hero h1{font-size:44px}.detail-hero{align-items:flex-start;flex-wrap:wrap}.big-score{width:80px}.budget-results,.valuation>div,.metric-grid{grid-template-columns:1fr}.holding-form{grid-template-columns:1fr}.chart-head{display:block}.range-buttons{margin-top:12px}.stock-chart{height:245px}}
 </style>
