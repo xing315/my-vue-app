@@ -39,3 +39,9 @@ coverage
 
 # Vitest
 __screenshots__/
+
+# Quant service runtime data
+quant-service/.venv/
+quant-service/data/
+quant-service/**/__pycache__/
+quant-service/.pytest_cache/

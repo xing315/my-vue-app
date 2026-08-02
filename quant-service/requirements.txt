@@ -1,0 +1,11 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+pydantic==2.11.7
+akshare==1.17.44
+baostock==0.8.9
+duckdb==1.3.2
+pandas==2.3.1
+pyarrow==21.0.0
+pytest==8.4.1
+httpx==0.28.1
+urllib3<2

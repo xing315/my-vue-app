@@ -7,10 +7,11 @@ import Blog from './Blog.vue'
 import News from './News.vue'
 import Analytics from './Analytics.vue'
 import Toolkit from './Toolkit.vue'
+import Quant from './Quant.vue'
 import { supabase } from './supabase.js'
 
 export default {
-  components: { Home, Accounting, Auth, Download, Blog, News, Analytics, Toolkit },
+  components: { Home, Accounting, Auth, Download, Blog, News, Analytics, Toolkit, Quant },
   data() {
     return {
       currentPage: 'home',
@@ -21,10 +22,9 @@ export default {
         { id: 'home', label: '首页', icon: '⌂' },
         { id: 'blog', label: '博客', icon: '✦' },
         { id: 'news', label: '资讯', icon: '◫' },
+        { id: 'quant', label: '量化分析', icon: '∿' },
         { id: 'analytics', label: 'App 观测', icon: '⌁' },
-        { id: 'toolkit', label: '工具', icon: '◇' },
-        { id: 'accounting', label: '记账', icon: '¥' },
-        { id: 'download', label: '下载', icon: '↓' }
+        { id: 'toolkit', label: '工具', icon: '◇' }
       ]
     }
   },
@@ -80,6 +80,7 @@ export default {
       <Home v-else-if="currentPage === 'home'" @navigate="navigateTo" />
       <Blog v-else-if="currentPage === 'blog'" />
       <News v-else-if="currentPage === 'news'" />
+      <Quant v-else-if="currentPage === 'quant'" :user="user" />
       <Analytics v-else-if="currentPage === 'analytics'" />
       <Toolkit v-else-if="currentPage === 'toolkit'" />
       <Accounting v-else-if="currentPage === 'accounting'" />

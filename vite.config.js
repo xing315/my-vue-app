@@ -18,5 +18,8 @@ export default defineConfig({
   server: {
     host: '127.0.0.1', // 强制使用 IP 地址而不是 localhost
     port: 5173,        // 可选：指定端口
+    proxy: {
+      '/api/quant': 'http://127.0.0.1:8000'
+    },
   }
 })

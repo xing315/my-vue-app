@@ -8,6 +8,8 @@
   },
   "scripts": {
     "dev": "vite",
+    "quant:sync": "./quant-service/run_pipeline.sh",
+    "quant:server": "./quant-service/run_server.sh",
     "build": "vite build",
     "preview": "vite preview"
   },

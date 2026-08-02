@@ -1,5 +1,28 @@
 # my-vue-app
 
+## A 股量化分析看板
+
+“量化分析”页面是只读研究与决策辅助工具，不连接券商，也不执行交易。前端请求
+`/api/quant/dashboard`；后端未启动时会展示带有醒目标识的演示快照，演示内容不可用于投资决策。
+
+后端位于 `quant-service/`，启动方式见该目录的 README。首次使用 Supabase 持久化持仓前执行：
+
+```sh
+supabase db push
+```
+
+历史行情与特征应保存在后端 DuckDB/Parquet 中；Supabase 只保存用户持仓、自选与每日评分快照。
+
+本地首次使用：
+
+```sh
+npm run quant:sync     # 首次下载全市场数据并生成评分，耗时较长
+npm run quant:server   # 终端 1：启动分析 API
+npm run dev            # 终端 2：启动网站
+```
+
+页面只有在真实快照生成成功后才会移除 `DEMO` 标记。
+
 ## DeepSeek AI 问答
 
 资讯页通过 Supabase Edge Function 调用 DeepSeek，API Key 不会进入浏览器代码。
