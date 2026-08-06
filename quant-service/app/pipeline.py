@@ -72,17 +72,27 @@ def collect(data_root: Path, limit: int | None = None) -> Path:
     spot.to_parquet(raw / "spot.parquet", index=False)
     financial.to_parquet(raw / "financial.parquet", index=False)
     symbols = spot.code.tolist(); end = date.today(); default_start = end - timedelta(days=900)
-    groups=defaultdict(list); cached_count=0
+    groups=defaultdict(list); cached_count=0; cache_errors=0
     for symbol in symbols:
         path=history_dir/f"{symbol}.parquet"; symbol_start=default_start
         if path.exists():
             try:
                 cached=pd.read_parquet(path,columns=["date"])
-                last=pd.to_datetime(cached["date"],errors="coerce").max()
-                if pd.notna(last): symbol_start=last.date()+timedelta(days=1)
-            except Exception: pass
+                if "date" in cached.columns:
+                    # 尝试多种日期格式兼容
+                    last=pd.to_datetime(cached["date"],errors="coerce").max()
+                    if pd.notna(last) and last.year > 2000:
+                        symbol_start=last.date()+timedelta(days=1)
+                    else:
+                        cache_errors+=1
+                else:
+                    cache_errors+=1
+            except Exception:
+                cache_errors+=1
         if symbol_start<=end: groups[symbol_start].append(symbol)
         else: cached_count+=1
+    if cache_errors>0: print(f"缓存检查: {cache_errors} 只股票缓存异常，将全量拉取", flush=True)
+    print(f"缓存检查: {cached_count} 只命中缓存, {sum(len(v) for v in groups.values())} 只需更新", flush=True)
     def grouped(iterator_factory):
         for group_start,group_symbols in groups.items():
             yield from iterator_factory(group_symbols,group_start,end)
@@ -93,8 +103,12 @@ def collect(data_root: Path, limit: int | None = None) -> Path:
             else:
                 path=history_dir/f"{symbol}.parquet"
                 if path.exists():
-                    old=pd.read_parquet(path); frame=pd.concat([old,frame],ignore_index=True)
-                    if "date" in frame: frame=frame.drop_duplicates("date",keep="last").sort_values("date")
+                    old=pd.read_parquet(path)
+                    # 确保新旧数据列兼容
+                    combined=pd.concat([old,frame],ignore_index=True,sort=False)
+                    if "date" in combined.columns: 
+                        combined=combined.drop_duplicates("date",keep="last").sort_values("date")
+                        frame=combined
                 frame.to_parquet(path,index=False); succeeded += 1
             if idx % 100 == 0 or idx == sum(map(len,groups.values())): print(f"{source} history {idx}/{sum(map(len,groups.values()))} (+{cached_count} cached)", flush=True)
         return succeeded, failed

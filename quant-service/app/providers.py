@@ -111,8 +111,43 @@ class AkshareProvider:
                 frame = ak.stock_zh_a_daily(symbol=prefix+symbol,
                     start_date=start.strftime("%Y%m%d"),end_date=end.strftime("%Y%m%d"),adjust="qfq")
                 if frame.empty: yield symbol,pd.DataFrame(),"empty"; continue
-                frame=frame.reset_index(); frame["tradestatus"]="1"; frame["isST"]="0"
-                if "turnover" in frame: frame["turn"]=pd.to_numeric(frame["turnover"],errors="coerce")*100
+                frame=frame.reset_index()
+                # 统一列名，确保有date列
+                column_mapping = {}
+                for col in frame.columns:
+                    col_lower = str(col).lower()
+                    if "date" in col_lower or "日期" in str(col):
+                        column_mapping[col] = "date"
+                    elif "open" in col_lower or "开盘" in str(col):
+                        column_mapping[col] = "open"
+                    elif "high" in col_lower or "最高" in str(col):
+                        column_mapping[col] = "high"
+                    elif "low" in col_lower or "最低" in str(col):
+                        column_mapping[col] = "low"
+                    elif "close" in col_lower or "收盘" in str(col):
+                        column_mapping[col] = "close"
+                    elif "volume" in col_lower or "成交量" in str(col):
+                        column_mapping[col] = "volume"
+                    elif "amount" in col_lower or "成交额" in str(col):
+                        column_mapping[col] = "amount"
+                    elif "turnover" in col_lower or "换手率" in str(col):
+                        column_mapping[col] = "turn"
+                frame = frame.rename(columns=column_mapping)
+                # 确保date列存在且格式正确
+                if "date" not in frame.columns:
+                    # 尝试从索引或其他列获取日期
+                    frame["date"] = frame.index.astype(str)
+                frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+                frame["tradestatus"] = "1"
+                frame["isST"] = "0"
+                if "turnover" in frame.columns: 
+                    frame["turn"] = pd.to_numeric(frame["turnover"], errors="coerce") * 100
+                elif "turn" not in frame.columns:
+                    frame["turn"] = np.nan
+                # 确保数值列类型正确
+                for col in ["open", "high", "low", "close", "volume", "amount", "turn"]:
+                    if col in frame.columns:
+                        frame[col] = pd.to_numeric(frame[col], errors="coerce")
                 yield symbol,frame,None
             except Exception as exc: yield symbol,pd.DataFrame(),type(exc).__name__
             time.sleep(delay)
