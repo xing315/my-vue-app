@@ -18,10 +18,19 @@ function stripHtml(value: string) {
   return value.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').trim()
 }
 
+type Instrument = { symbol:string; name:string }
+function tag(items: Record<string,unknown>[], instruments: Instrument[]) {
+  const safe=instruments.filter(i=>/^[036]\d{5}$/.test(i.symbol)&&i.name?.trim().length>=3).slice(0,200)
+  return items.map(item=>{const text=`${item.title??''} ${item.summary??''}`;const matches=safe.filter(i=>text.includes(i.symbol)||text.includes(i.name.trim()))
+    return {...item,relatedSymbols:matches.map(i=>i.symbol),relevanceScore:matches.length?100:0,matchedBy:matches.length?'股票代码或公司全称':null}})
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
   if (request.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
   try {
+    const input=await request.json().catch(()=>({}))
+    const instruments=Array.isArray(input?.instruments)?input.instruments:[]
     const url = new URL('https://np-weblist.eastmoney.com/comm/web/getFastNewsList')
     url.search = new URLSearchParams({ client:'web', biz:'web_724', fastColumn:'102', sortEnd:'', pageSize:'100', req_trace:String(Date.now()) }).toString()
     const response = await fetch(url, { headers: { 'User-Agent':'Mozilla/5.0', 'Referer':'https://kuaixun.eastmoney.com/' } })
@@ -34,7 +43,7 @@ Deno.serve(async (request) => {
         source:'东方财富财经快讯', url:code?`https://finance.eastmoney.com/a/${code}.html`:'https://kuaixun.eastmoney.com/', category:category(title) }
     }).filter((item: {title:string}) => item.title)
     if (!items.length) throw new Error('Eastmoney empty')
-    return json({ mode:'live', fetchedAt:new Date().toISOString(), source:'东方财富财经快讯', items })
+    return json({ mode:'live', fetchedAt:new Date().toISOString(), source:'东方财富财经快讯', items:tag(items,instruments) })
   } catch (eastmoneyError) {
     try {
       const url = new URL('https://zhibo.sina.com.cn/api/zhibo/feed')
@@ -46,7 +55,7 @@ Deno.serve(async (request) => {
         id:`sina-${row.create_time}-${index}`,title:text.slice(0,100),summary:text.slice(100),publishedAt:String(row.create_time??''),
         source:'新浪财经7×24',url:'https://finance.sina.com.cn/7x24/',category:category(text)}}).filter((item:{title:string})=>item.title)
       if (!items.length) throw new Error('Sina empty')
-      return json({ mode:'live', fetchedAt:new Date().toISOString(), source:'新浪财经7×24', items })
+      return json({ mode:'live', fetchedAt:new Date().toISOString(), source:'新浪财经7×24', items:tag(items,instruments) })
     } catch (sinaError) {
       console.error('financial-news sources unavailable', eastmoneyError, sinaError)
       return json({ error:'实时财经新闻源暂时不可用', items:[] }, 503)

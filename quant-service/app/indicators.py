@@ -30,6 +30,7 @@ def history_features(frame: pd.DataFrame) -> dict:
         "volatility": float(returns.tail(240).std() * math.sqrt(250)),
         "max_drawdown": float(drawdown.tail(500).min()),
         "avg_amount_20": float(amount.tail(20).mean()) if len(amount) else np.nan,
+        "ma20_ratio": float(last / close.tail(20).mean() - 1),
         "ma60_ratio": float(last / close.tail(60).mean() - 1),
         "ma120_ratio": float(last / close.tail(120).mean() - 1),
         "history_price": last,

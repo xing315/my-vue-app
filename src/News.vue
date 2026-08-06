@@ -1,32 +1,40 @@
 <script>
 import { supabase } from './supabase.js'
+import { loadResearchState, toggleSavedNews } from './research.js'
 
 export default {
-  emits:['back'],
+  props:{user:Object},
+  emits:['back','open-stock'],
   data(){return{
-    tab:'全部',query:'',saved:[],news:[],newsLoading:true,newsError:'',newsSource:'',fetchedAt:null,
+    tab:'全部',query:'',saved:[],watchlist:[],holdings:[],news:[],newsLoading:true,newsError:'',newsSource:'',fetchedAt:null,
     market:null,tickers:[],marketError:'',
     aiQuestion:'',aiLoading:false,aiError:'',messages:[],quotaRemaining:null,
     suggestions:['解释今天市场宽度代表什么','如何判断一家公司估值是否合理？','帮我解释市盈率和市净率']
   }},
   computed:{
-    tabs(){return ['全部',...new Set(this.news.map(n=>n.category))]},
-    filtered(){const q=this.query.trim().toLowerCase();return this.news.filter(n=>(this.tab==='全部'||n.category===this.tab)&&(!q||`${n.title} ${n.summary}`.toLowerCase().includes(q)))},
+    tabs(){return ['全部','我的自选','持仓相关','宏观','行业',...new Set(this.news.map(n=>n.category).filter(c=>!['宏观'].includes(c)))]},
+    filtered(){const q=this.query.trim().toLowerCase();return this.news.filter(n=>{const related=n.relatedSymbols||[];const inView=this.tab==='全部'||(this.tab==='我的自选'&&related.some(c=>this.watchlist.includes(c)))||(this.tab==='持仓相关'&&related.some(c=>this.holdings.some(h=>h.code===c)))||(this.tab==='行业'&&n.category!=='宏观'&&related.length)||(n.category===this.tab);return inView&&(!q||`${n.title} ${n.summary}`.toLowerCase().includes(q))})},
     breadth(){return Number(this.market?.breadth??0)},
     sentiment(){if(!this.market)return '数据不足';return this.breadth>=60?'偏强':this.breadth>=45?'中性':'偏弱'}
   },
-  mounted(){this.refresh()},
+  async mounted(){await this.loadPersonal();await this.refresh()},
+  watch:{user(){this.loadPersonal().then(()=>this.refresh())}},
   methods:{
-    async refresh(){await Promise.allSettled([this.loadNews(),this.loadMarket()])},
+    async loadPersonal(){try{const state=await loadResearchState(this.user);this.watchlist=state.watchlist;this.holdings=state.holdings;this.saved=state.savedNews.map(n=>n.news_id)}catch{}},
+    async refresh(){await this.loadMarket();await this.loadNews()},
     async loadNews(){
       this.newsLoading=true;this.newsError=''
       try{
         let payload
-        try{const response=await fetch('/api/quant/news',{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!response.ok)throw new Error(`本地新闻 HTTP ${response.status}`);payload=await response.json();if(payload.mode!=='live')throw new Error('非实时数据')}
+        const personalCodes=[...new Set([...this.watchlist,...this.holdings.map(h=>h.code)])]
+        let personalInstruments=[]
+        if(personalCodes.length){const {data}=await supabase.from('quant_latest_scores').select('symbol,name').in('symbol',personalCodes);personalInstruments=data||[]}
+        const instruments=[...new Map([...this.tickers.map(t=>({symbol:t.code,name:t.name})),...personalInstruments].map(i=>[i.symbol,i])).values()]
+        try{const symbols=instruments.map(i=>i.symbol).join(',');const response=await fetch(`/api/quant/news?symbols=${encodeURIComponent(symbols)}`,{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!response.ok)throw new Error(`本地新闻 HTTP ${response.status}`);payload=await response.json();if(payload.mode!=='live')throw new Error('非实时数据')}
         catch{
-          try{const response=await fetch('/.netlify/functions/financial-news',{cache:'no-store'});if(!response.ok)throw new Error(`Netlify 新闻 HTTP ${response.status}`);payload=await response.json()}
+          try{const response=await fetch('/.netlify/functions/financial-news',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({instruments}),cache:'no-store'});if(!response.ok)throw new Error(`Netlify 新闻 HTTP ${response.status}`);payload=await response.json()}
           catch{
-            const {data,error}=await supabase.functions.invoke('financial-news',{body:{refresh:true}})
+            const {data,error}=await supabase.functions.invoke('financial-news',{body:{refresh:true,instruments}})
             if(error)throw error
             payload=data
           }
@@ -49,7 +57,7 @@ export default {
       }catch(error){this.market=null;this.tickers=[];this.marketError=error.message||'市场快照暂时不可用'}
     },
     formatTime(value){if(!value)return '时间未知';const date=new Date(value);return Number.isNaN(date.getTime())?String(value):date.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})},
-    toggle(id){this.saved.includes(id)?this.saved=this.saved.filter(x=>x!==id):this.saved.push(id)},
+    async toggle(item){const active=this.saved.includes(item.id);try{await toggleSavedNews(this.user,item,active);this.saved=active?this.saved.filter(x=>x!==item.id):[...this.saved,item.id]}catch(e){this.newsError=e.message}},
     openNews(item){if(item.url)window.open(item.url,'_blank','noopener,noreferrer')},
     useSuggestion(text){this.aiQuestion=text;this.askDeepSeek()},
     async askDeepSeek(){
@@ -86,11 +94,12 @@ export default {
  <div class="filters"><button v-for="t in tabs" :key="t" :class="['pill',{active:tab===t}]" @click="tab=t">{{t}}</button></div>
  <div v-if="newsLoading" class="news-state">正在获取真实财经新闻…</div>
  <div v-else-if="newsError" class="news-state error"><b>新闻暂时不可用</b><p>{{newsError}}</p><button @click="loadNews">重新获取</button></div>
- <div v-else class="news-layout"><section><article v-for="(n,i) in filtered" :key="n.id"><div class="rank">{{String(i+1).padStart(2,'0')}}</div><div class="news-body" @click="openNews(n)"><div class="meta"><b>{{n.category}}</b>{{n.source}} · {{formatTime(n.publishedAt)}}</div><h2>{{n.title}}</h2><p v-if="n.summary">{{n.summary}}</p><a v-if="n.url" :href="n.url" target="_blank" rel="noopener noreferrer" @click.stop>查看原文 ↗</a></div><button @click="toggle(n.id)" :class="{saved:saved.includes(n.id)}">{{saved.includes(n.id)?'★':'☆'}}</button></article><div v-if="!filtered.length" class="news-state">没有匹配的实时新闻</div></section><aside><p class="eyebrow">DATA PROVENANCE</p><h3>数据来源</h3><p>新闻：{{newsSource}}</p><p>行情：Supabase 量化盘后快照</p><p>数据截止：{{formatTime(market?.updatedAt)}}</p><hr><small>已收藏 {{saved.length}} 条 · 原文归新闻发布方所有</small></aside></div>
+ <div v-else class="news-layout"><section><article v-for="(n,i) in filtered" :key="n.id"><div class="rank">{{String(i+1).padStart(2,'0')}}</div><div class="news-body" @click="openNews(n)"><div class="meta"><b>{{n.category}}</b>{{n.source}} · {{formatTime(n.publishedAt)}}</div><div v-if="n.relatedSymbols?.length" class="related"><button v-for="code in n.relatedSymbols" :key="code" @click.stop="$emit('open-stock',code)">{{code}} · 查看量化分析 →</button><small>{{n.matchedBy}} · 相关度 {{n.relevanceScore}}</small></div><h2>{{n.title}}</h2><p v-if="n.summary">{{n.summary}}</p><a v-if="n.url" :href="n.url" target="_blank" rel="noopener noreferrer" @click.stop>查看原文 ↗</a></div><button @click="toggle(n)" :class="{saved:saved.includes(n.id)}">{{saved.includes(n.id)?'★':'☆'}}</button></article><div v-if="!filtered.length" class="news-state">没有匹配的真实资讯</div></section><aside><p class="eyebrow">DATA PROVENANCE</p><h3>数据来源</h3><p>新闻：{{newsSource}}</p><p>关联规则：股票代码或公司全称精确匹配</p><p>行情：Supabase 量化盘后快照</p><p>数据截止：{{formatTime(market?.updatedAt)}}</p><hr><small>已收藏 {{saved.length}} 条 · 原文归新闻发布方所有</small></aside></div>
 </div></template>
 
 <style scoped>
 .back-button{border:0;background:none;color:var(--green);cursor:pointer;padding:0 0 20px;font-size:13px}.back-button span{margin-left:5px}.news-hero{display:flex;justify-content:space-between;align-items:end}.market{width:158px;height:158px;border-radius:50%;border:12px solid #dce8c4;display:grid;place-content:center;text-align:center;flex:none}.market.unavailable{border-color:#ddd}.market strong{font:38px Georgia;color:var(--green);margin:5px 0}.market span,.market small{font-size:10px;color:var(--green)}.data-status{display:flex;align-items:center;gap:24px;background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:13px 15px;margin:28px 0}.data-status>div{display:flex;align-items:center;gap:9px}.data-status i{width:8px;height:8px;border-radius:50%;background:#55ad69}.data-status i.error{background:#d75b4d}.data-status b,.data-status small{display:block}.data-status b{font-size:11px}.data-status small{color:var(--muted);font-size:9px;margin-top:3px}.data-status button{margin-left:auto;border:1px solid var(--line);background:white;border-radius:8px;padding:8px 11px;font-size:10px;cursor:pointer}.ticker{margin:28px 0 18px;background:var(--ink);color:white;padding:16px 20px;border-radius:12px;display:flex;justify-content:space-between;gap:20px;overflow:auto;white-space:nowrap;font-size:11px}.ticker b{margin:0 5px}.ticker i{font-style:normal}.ticker .positive{color:#ff9382}.ticker .negative{color:#75d4b7}.ticker small{margin-left:7px;color:#aebdb8}.search{display:flex;align-items:center;background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:0 16px}.search input{flex:1;border:0;background:none;padding:16px;outline:none}.search kbd{font-size:11px;color:var(--green)}.filters{display:flex;gap:8px;margin:18px 0 28px;overflow:auto}.news-layout{display:grid;grid-template-columns:1fr 300px;gap:24px}.news-layout section{border-top:1px solid var(--line)}.news-layout article{display:grid;grid-template-columns:48px 1fr 34px;gap:16px;padding:22px 0;border-bottom:1px solid var(--line);align-items:start}.rank{font:20px Georgia;color:#a4aaa2}.meta{font-size:10px;color:var(--muted)}.meta b{color:var(--green);margin-right:9px}.news-body{cursor:pointer}.news-body h2{font:21px/1.45 Georgia,"Songti SC";margin:7px 0}.news-body>p{font-size:11px;line-height:1.65;color:var(--muted);margin:7px 0}.news-body a{font-size:10px;color:var(--green)}.news-layout article>button{border:0;background:none;font-size:24px;cursor:pointer;color:#9ca39f}.saved{color:#e4a72e!important}aside{background:#dfe9c8;border-radius:18px;padding:28px;height:max-content}aside h3{font:27px Georgia;margin:10px 0}aside p{color:#59645f;line-height:1.7;font-size:11px}aside hr{border:0;border-top:1px solid #bfcab0;margin:24px 0}.news-state{text-align:center;padding:55px;background:var(--paper);border:1px solid var(--line);border-radius:15px;color:var(--muted)}.news-state.error{color:#7a4237}.news-state button{border:0;background:var(--green);color:white;border-radius:8px;padding:9px 13px}
+.related{display:flex;align-items:center;gap:8px;margin-top:9px}.related button{border:0;background:#e2edd6;color:var(--green);border-radius:999px;padding:6px 9px;font-size:9px;cursor:pointer}.related small{font-size:8px;color:var(--muted)}
 .ai-studio{margin:24px 0;background:var(--ink);color:white;border-radius:24px;padding:30px}.ai-intro{display:flex;align-items:center;justify-content:space-between}.ai-badge{display:inline-block;background:var(--lime);color:var(--green);font-size:10px;font-weight:900;letter-spacing:1.5px;padding:6px 9px;border-radius:999px}.ai-intro h2{font:30px Georgia,"Songti SC";margin:14px 0 8px}.ai-intro p{margin:0;color:#aebdb8;font-size:12px}.ai-orb{width:58px;height:58px;border:1px solid #52736a;border-radius:50%;display:grid;place-items:center;color:var(--lime);font:20px Georgia}.suggestions{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:28px}.suggestions button{border:1px solid #3d554e;background:#22302c;color:#dce5e2;border-radius:12px;padding:14px;text-align:left;cursor:pointer;font-size:12px;display:flex;justify-content:space-between}.conversation{max-height:420px;overflow:auto;margin-top:25px}.message{border:0;padding:0;margin:0 0 18px}.message-role{font-size:10px;letter-spacing:1.4px;color:var(--lime);margin-bottom:7px}.message p{white-space:pre-wrap;line-height:1.75;margin:0;background:#23332e;border-radius:5px 16px 16px 16px;padding:15px}.message.user{text-align:right}.message.user p{display:inline-block;background:#dfe9c8;color:var(--ink);text-align:left}.thinking{display:flex;gap:5px;align-items:center;color:#aebdb8;font-size:12px}.thinking i{width:6px;height:6px;background:var(--lime);border-radius:50%}.ai-input{display:flex;align-items:center;margin-top:22px;background:#f7f4ed;border-radius:16px;padding:8px}.ai-input textarea{flex:1;border:0;background:transparent;resize:none;outline:none;padding:10px 12px}.ai-input button{width:42px;height:42px;border:0;border-radius:50%;background:var(--green);color:var(--lime);font-size:20px}.ai-error{color:#ffb5a4;font-size:12px;margin-top:10px}.quota-info{color:#aebdb8;font-size:11px;text-align:right;margin-top:8px}
 @media(max-width:780px){.market{display:none}.news-layout{grid-template-columns:1fr}.ticker{justify-content:flex-start}aside{order:-1}.data-status{align-items:flex-start;flex-direction:column}.data-status button{margin:0}.suggestions{grid-template-columns:1fr}}
 </style>

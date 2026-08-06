@@ -23,6 +23,26 @@ npm run dev            # 终端 2：启动网站
 
 页面只有在真实快照生成成功后才会移除 `DEMO` 标记。
 
+`npm run quant:sync` 会在本地快照通过安全门后自动发布到 Supabase；如果发布配置缺失或
+发布失败，命令会以失败状态退出，不会只同步本地后假装成功。无需再单独执行发布命令。
+
+## 智能投研驾驶舱
+
+量化页默认展示个人驾驶舱。登录用户可跨设备同步自选股与持仓，查看盘后评分、Top 30、
+均线和风险变化信号，并基于服务端可信数据生成 DeepSeek 研究简报。资讯页会使用股票代码或
+公司全称进行精确关联，不使用模糊简称推断。
+
+上线前执行最新迁移并重新部署两个 Edge Function：
+
+```sh
+supabase db push
+supabase functions deploy financial-news
+supabase functions deploy deepseek-chat
+```
+
+随后重新运行 `npm run quant:sync`。第一次新快照用于建立比较基线，从第二个交易日快照开始
+产生评分、排名、均线和风险变化信号。预警仅在站内展示，不发送邮件、短信，也不连接券商。
+
 ## DeepSeek AI 问答
 
 资讯页通过 Supabase Edge Function 调用 DeepSeek，API Key 不会进入浏览器代码。

@@ -201,6 +201,7 @@ def build(data_root: Path, min_coverage: float = .75) -> Path:
           "revenueGrowth":finite(getattr(row,"revenue_growth",None)),"profitGrowth":finite(getattr(row,"profit_growth",None)),
           "cashflowPerShare":finite(getattr(row,"cashflow_ps",None)),"return1y":finite(getattr(row,"return_1y",None)),
           "maxDrawdown":finite(getattr(row,"max_drawdown",None)),"volatility":finite(getattr(row,"volatility",None)),
+          "ma20Ratio":finite(getattr(row,"ma20_ratio",None)),"ma60Ratio":finite(getattr(row,"ma60_ratio",None)),
           "averageAmount20":finite(getattr(row,"avg_amount_20",None))}
         published.append({"code":row.code,"name":name,"industry":industry,"price":finite(row.price,0),"change":finite(getattr(row,"change",0),0),"score":result.score,"confidence":result.confidence,
           "quality":round(dims["quality"]*25),"growth":round(dims["growth"]*20),"valuation":round(dims["valuation"]*20),"trend":round(dims["trend"]*15),"risk":round(dims["risk"]*10),"liquidity":round(dims["liquidity"]*10),"position":list(pos),"pe":finite(getattr(row,"pe",None)),"pb":finite(getattr(row,"pb",None)),"reportDate":str(getattr(row,"report_date","")),"reason":reason,"counter":counter,"flags":exclusions})
@@ -216,9 +217,16 @@ def build(data_root: Path, min_coverage: float = .75) -> Path:
       "stocks":published,
       "validation":{"annualReturn":0,"maxDrawdown":0,"winRate":0,"excessReturn":0,"period":"滚动回测待生成"},
       "sources":[{"name":meta.get("historySource","历史行情"),"state":"ready","detail":f"复权日线覆盖 {coverage:.1%}"},{"name":meta.get("financialSource","财务数据"),"state":"ready","detail":f"行情来源 {meta.get('spotSource','unknown')}"},{"name":"数据质量","state":"ready","detail":f"已评分 {len(published)} 只"}]}
+    target=data_root/"latest-dashboard.json"
+    previous_payload=None
+    if target.exists():
+        try: previous_payload=json.loads(target.read_text(encoding="utf-8"))
+        except (OSError,ValueError): previous_payload=None
     from .recommendations import build_recommendations
     payload["recommendations"] = build_recommendations(data_root, payload)
-    temp=data_root/"latest-dashboard.json.tmp"; target=data_root/"latest-dashboard.json"
+    from .signals import build_signal_events
+    payload["signals"] = build_signal_events(payload, previous_payload)
+    temp=data_root/"latest-dashboard.json.tmp"
     temp.write_text(json.dumps(payload,ensure_ascii=False,indent=2),encoding="utf-8"); os.replace(temp,target)
     from .local_db import update_database
     try:
@@ -249,6 +257,8 @@ def main():
             print(publish_file(root/"latest-dashboard.json"), flush=True)
         elif args.command == "publish":
             raise RuntimeError("发布需要 SUPABASE_URL 和 SUPABASE_SERVICE_ROLE_KEY")
+        elif os.getenv("QUANT_REQUIRE_SUPABASE_PUBLISH") == "1":
+            raise RuntimeError("本次同步要求自动发布，但缺少 SUPABASE_URL 或 SUPABASE_SERVICE_ROLE_KEY")
         else:
             print("未配置 Supabase service_role，跳过线上发布", flush=True)
 

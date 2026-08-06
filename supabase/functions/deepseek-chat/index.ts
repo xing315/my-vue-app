@@ -98,6 +98,7 @@ Deno.serve(async (request) => {
     }
 
     const payload = await request.json()
+    const mode = payload?.mode === 'research_brief' ? 'research_brief' : 'chat'
     const incoming = Array.isArray(payload?.messages) ? payload.messages : []
     const messages: ChatMessage[] = incoming
       .filter((item: ChatMessage) =>
@@ -111,9 +112,11 @@ Deno.serve(async (request) => {
         content: item.content.trim().slice(0, 4000),
       }))
 
-    if (!messages.length || messages[messages.length - 1].role !== 'user') {
+    const symbol = typeof payload?.symbol === 'string' && /^[036]\d{5}$/.test(payload.symbol) ? payload.symbol : null
+    if (mode === 'chat' && (!messages.length || messages[messages.length - 1].role !== 'user')) {
       return json({ error: '请输入有效问题' }, 400)
     }
+    if (mode === 'research_brief' && !symbol) return json({ error:'请输入有效股票代码' }, 400)
 
     const supabaseAdmin = createClient(supabaseUrl, supabaseSecretKey, {
       auth: { persistSession: false, autoRefreshToken: false },
@@ -141,6 +144,43 @@ Deno.serve(async (request) => {
       }, 429)
     }
 
+    let researchContext: Record<string, unknown> | null = null
+    if (mode === 'research_brief' && symbol) {
+      const { data:stock, error:stockError } = await supabaseAdmin.from('quant_latest_scores')
+        .select('symbol,name,industry,score,confidence,rating,price,change_percent,position_min,position_max,detail,trade_date,updated_at,model_version')
+        .eq('symbol',symbol).single()
+      if (stockError || !stock) return json({ error:'没有找到已发布的可信量化数据' }, 404)
+      const { data:signals } = await supabaseAdmin.from('quant_signal_events')
+        .select('trade_date,signal_type,severity,title,reason,previous_value,current_value,source')
+        .eq('symbol',symbol).order('trade_date',{ascending:false}).limit(10)
+      const requestedNews = Array.isArray(payload?.selectedNewsIds)
+        ? payload.selectedNewsIds.filter((id:unknown)=>typeof id==='string').slice(0,5) : []
+      let news: unknown[] = []
+      if(requestedNews.length){
+        const {data}=await supabaseAdmin.from('quant_saved_news')
+          .select('news_id,title,url,source,published_at,related_symbols').eq('user_id',userId).in('news_id',requestedNews)
+        news=data||[]
+      }
+      researchContext={stock,signals:signals||[],selectedSavedNews:news,
+        trustNotice:'以上量化数据由服务端读取；没有提供的数据必须写暂无数据。'}
+    }
+
+    const system = mode === 'research_brief' ? [
+      '你是A股研究简报生成器，只能使用用户消息内的服务端可信JSON。',
+      '不得补充外部事实、实时新闻、目标价、收益预测或买卖指令。',
+      '必须按以下六节输出：当前结论、支持证据、反面证据、近期变化、需要核实的问题、风险提示。',
+      '每条事实注明来源类别和数据日期；缺失内容明确写“暂无数据”。',
+    ].join('') : [
+      '你是张红星个人网站中的中文知识与财经助手。',
+      '回答应准确、清晰、结构化，优先使用普通人能理解的语言。',
+      '你没有实时联网搜索能力，不得声称知道当前行情或刚发生的新闻。',
+      '涉及时效性内容时，必须明确提醒用户核对最新可靠来源。',
+      '涉及投资时给出风险提示，不提供保证收益或个性化买卖指令。',
+    ].join('')
+    const requestMessages = mode === 'research_brief'
+      ? [{role:'user',content:`请生成研究简报。可信数据：${JSON.stringify(researchContext)}`}]
+      : messages
+
     const response = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
@@ -150,19 +190,7 @@ Deno.serve(async (request) => {
       body: JSON.stringify({
         model: 'deepseek-v4-flash',
         thinking: { type: 'disabled' },
-        messages: [
-          {
-            role: 'system',
-            content: [
-              '你是张红星个人网站中的中文知识与财经助手。',
-              '回答应准确、清晰、结构化，优先使用普通人能理解的语言。',
-              '你没有实时联网搜索能力，不得声称知道当前行情或刚发生的新闻。',
-              '涉及时效性内容时，必须明确提醒用户核对最新可靠来源。',
-              '涉及投资时给出风险提示，不提供保证收益或个性化买卖指令。',
-            ].join(''),
-          },
-          ...messages,
-        ],
+        messages: [{ role:'system', content:system }, ...requestMessages],
         max_tokens: 1200,
         temperature: 0.5,
       }),
@@ -182,6 +210,8 @@ Deno.serve(async (request) => {
 
     return json({
       answer,
+      mode,
+      symbol,
       remaining: quota.remaining_count,
       usage: {
         promptTokens: result?.usage?.prompt_tokens ?? null,

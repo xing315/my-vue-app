@@ -66,6 +66,7 @@ export default {
       else this.navigateTo('home')
     },
     handleAuthSuccess(user) { this.user = user; this.navigateTo('home') },
+    openStock(symbol) { sessionStorage.setItem('quant-open-symbol',symbol); this.navigateTo('quant') },
     async logout() {
       if (!confirm('确定要退出登录吗？')) return
       await supabase.auth.signOut()
@@ -99,7 +100,7 @@ export default {
       <div v-if="loading" class="loading-screen"><span></span><p>正在抵达数字空间…</p></div>
       <Home v-else-if="currentPage === 'home'" @navigate="navigateTo" />
       <Blog v-else-if="currentPage === 'blog'" />
-      <News v-else-if="currentPage === 'news'" @back="goBack" />
+      <News v-else-if="currentPage === 'news'" :user="user" @back="goBack" @open-stock="openStock" />
       <Quant v-else-if="currentPage === 'quant'" :user="user" />
       <Analytics v-else-if="currentPage === 'analytics'" />
       <Toolkit v-else-if="currentPage === 'toolkit'" />

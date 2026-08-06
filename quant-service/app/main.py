@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -33,8 +35,25 @@ def _news_category(text: str) -> str:
     if any(word in text for word in ("公司", "集团", "业绩", "营收", "利润", "收购")): return "公司"
     return "市场"
 
+def _tag_news(items: list[dict], symbols: set[str] | None = None) -> list[dict]:
+    snapshot = DATA_ROOT / "latest-dashboard.json"
+    instruments = []
+    if snapshot.exists():
+        try:
+            instruments = [{"symbol": row["code"], "name": row["name"], "industry": row.get("industry")}
+                           for row in json.loads(snapshot.read_text(encoding="utf-8")).get("stocks", [])
+                           if not symbols or row["code"] in symbols]
+        except (OSError, ValueError, KeyError): pass
+    for item in items:
+        text = f"{item.get('title','')} {item.get('summary','')}"
+        matches = [row for row in instruments if row["symbol"] in text or (len(row["name"]) >= 3 and row["name"] in text)]
+        item["relatedSymbols"] = [row["symbol"] for row in matches]
+        item["relevanceScore"] = 100 if matches else 0
+        item["matchedBy"] = "股票代码或公司全称" if matches else None
+    return items
+
 @app.get("/api/quant/news")
-def financial_news():
+def financial_news(symbols: str = ""):
     """Fetch real financial wires on every request; never return demo stories."""
     import akshare as ak
     items, source = [], ""
@@ -55,7 +74,8 @@ def financial_news():
                     "summary": text[100:], "publishedAt": str(row.get("时间") or ""), "source": source,
                     "url": "https://finance.sina.com.cn/7x24/", "category": _news_category(text)})
     if not items: raise HTTPException(status_code=503, detail="实时财经新闻源暂时不可用")
-    return {"mode":"live","fetchedAt":_now(),"source":source,"items":items}
+    wanted = {value for value in symbols.split(",") if re.fullmatch(r"[036]\d{5}", value)}
+    return {"mode":"live","fetchedAt":_now(),"source":source,"items":_tag_news(items, wanted or None)}
 
 @app.get("/api/quant/dashboard")
 def dashboard():

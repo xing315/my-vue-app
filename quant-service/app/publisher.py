@@ -57,6 +57,11 @@ class SupabasePublisher:
         )
         response.raise_for_status()
 
+    def _select(self, table: str, params: dict) -> list[dict]:
+        response = self.client.get(f"{self.base}/{table}", params=params)
+        response.raise_for_status()
+        return response.json()
+
     def publish(self, payload: dict, batch_size: int = 200, data_root: Path | None = None) -> dict:
         if payload.get("mode") != "live":
             raise ValueError("只允许发布通过全市场安全门的 live 快照")
@@ -106,6 +111,25 @@ class SupabasePublisher:
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code != 404: raise
                 print("Supabase 推荐历史表尚未迁移，最新推荐已随 scores.detail 发布", flush=True)
+        signals = payload.get("signals") or []
+        if signals:
+            try:
+                self._upsert("quant_signal_events", signals, "trade_date,symbol,signal_type")
+                symbols = sorted({item["symbol"] for item in signals})
+                symbol_filter = "(" + ",".join(symbols) + ")"
+                owners: dict[str, set[str]] = {}
+                for table in ("quant_watchlist", "quant_holdings"):
+                    for row in self._select(table, {"select": "user_id,symbol", "symbol": f"in.{symbol_filter}"}):
+                        owners.setdefault(row["symbol"], set()).add(row["user_id"])
+                published_signals = self._select("quant_signal_events", {
+                    "select": "id,symbol", "trade_date": f"eq.{trade_date}", "symbol": f"in.{symbol_filter}"})
+                inbox = [{"user_id": user_id, "signal_id": event["id"]}
+                         for event in published_signals for user_id in owners.get(event["symbol"], set())]
+                if inbox: self._upsert("quant_user_alerts", inbox, "user_id,signal_id")
+                print(f"Supabase signals {len(signals)}, inbox {len(inbox)}", flush=True)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 404: raise
+                print("Supabase 投研驾驶舱表尚未迁移，跳过盘后信号发布", flush=True)
         chart_bytes = 0
         if data_root is not None:
             from .chart_shards import build_chart_shards

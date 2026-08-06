@@ -8,5 +8,5 @@ if [ "$weekday" -gt 5 ]; then
 fi
 mkdir -p data/logs
 echo "$(date '+%F %T') quant sync started"
-./run_pipeline.sh
+QUANT_REQUIRE_SUPABASE_PUBLISH=1 ./run_pipeline.sh
 echo "$(date '+%F %T') quant sync completed"
