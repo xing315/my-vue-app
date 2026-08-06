@@ -25,12 +25,13 @@ class AkshareProvider:
         import akshare as ak
         frame = ak.stock_zh_a_spot()
         frame = _rename(frame, {"code":["代码"],"name":["名称"],"price":["最新价"],
-            "change":["涨跌幅"],"volume":["成交量"],"amount":["成交额"],"high":["最高"],"low":["最低"]})
+            "change":["涨跌幅"],"volume":["成交量"],"amount":["成交额"],
+            "open":["今开","开盘"],"high":["最高"],"low":["最低"],"preclose":["昨收","昨日收盘"]})
         if not {"code","name","price","amount"}.issubset(frame.columns):
             raise ValueError("新浪行情字段不完整")
         frame["code"] = frame["code"].astype(str).str.extract(r"(\d{6})$",expand=False)
         frame = frame[frame.code.str.match(r"^[036]\d{5}$",na=False)]
-        for col in ["price","change","volume","amount","high","low"]:
+        for col in ["price","change","volume","amount","open","high","low","preclose"]:
             if col in frame: frame[col]=pd.to_numeric(frame[col],errors="coerce")
         for col in ["turnover","pe","pb","market_cap"]: frame[col]=np.nan
         return frame
@@ -41,17 +42,26 @@ class AkshareProvider:
         frame = _rename(frame, {
             "code": ["代码"], "name": ["名称"], "price": ["最新价"],
             "change": ["涨跌幅"], "volume": ["成交量"], "amount": ["成交额"],
+            "open": ["今开", "开盘"], "high": ["最高"], "low": ["最低"],
+            "preclose": ["昨收", "昨日收盘"],
             "turnover": ["换手率"], "pe": ["市盈率-动态", "市盈率"],
             "pb": ["市净率"], "market_cap": ["总市值"],
-            "float_cap": ["流通市值"], "high": ["最高"], "low": ["最低"],
+            "float_cap": ["流通市值"],
         })
         required = {"code", "name", "price", "amount", "turnover"}
         if not required.issubset(frame.columns):
             raise ValueError(f"AKShare 行情字段不完整: {sorted(required - set(frame.columns))}")
         frame["code"] = frame["code"].astype(str).str.zfill(6)
-        for col in set(frame.columns) & {"price","change","volume","amount","turnover","pe","pb","market_cap","float_cap","high","low"}:
+        for col in set(frame.columns) & {"price","change","volume","amount","open","high","low","preclose","turnover","pe","pb","market_cap","float_cap"}:
             frame[col] = pd.to_numeric(frame[col], errors="coerce")
         return frame
+
+    def trading_days(self) -> list[date]:
+        """Return the exchange calendar using one small request."""
+        import akshare as ak
+        frame = ak.tool_trade_date_hist_sina()
+        column = "trade_date" if "trade_date" in frame.columns else frame.columns[0]
+        return [value.date() for value in pd.to_datetime(frame[column], errors="coerce").dropna()]
 
     def financial_report(self, report_date: str) -> pd.DataFrame:
         import akshare as ak
@@ -111,8 +121,43 @@ class AkshareProvider:
                 frame = ak.stock_zh_a_daily(symbol=prefix+symbol,
                     start_date=start.strftime("%Y%m%d"),end_date=end.strftime("%Y%m%d"),adjust="qfq")
                 if frame.empty: yield symbol,pd.DataFrame(),"empty"; continue
-                frame=frame.reset_index(); frame["tradestatus"]="1"; frame["isST"]="0"
-                if "turnover" in frame: frame["turn"]=pd.to_numeric(frame["turnover"],errors="coerce")*100
+                frame=frame.reset_index()
+                # 统一列名，确保有date列
+                column_mapping = {}
+                for col in frame.columns:
+                    col_lower = str(col).lower()
+                    if "date" in col_lower or "日期" in str(col):
+                        column_mapping[col] = "date"
+                    elif "open" in col_lower or "开盘" in str(col):
+                        column_mapping[col] = "open"
+                    elif "high" in col_lower or "最高" in str(col):
+                        column_mapping[col] = "high"
+                    elif "low" in col_lower or "最低" in str(col):
+                        column_mapping[col] = "low"
+                    elif "close" in col_lower or "收盘" in str(col):
+                        column_mapping[col] = "close"
+                    elif "volume" in col_lower or "成交量" in str(col):
+                        column_mapping[col] = "volume"
+                    elif "amount" in col_lower or "成交额" in str(col):
+                        column_mapping[col] = "amount"
+                    elif "turnover" in col_lower or "换手率" in str(col):
+                        column_mapping[col] = "turn"
+                frame = frame.rename(columns=column_mapping)
+                # 确保date列存在且格式正确
+                if "date" not in frame.columns:
+                    # 尝试从索引或其他列获取日期
+                    frame["date"] = frame.index.astype(str)
+                frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+                frame["tradestatus"] = "1"
+                frame["isST"] = "0"
+                if "turnover" in frame.columns: 
+                    frame["turn"] = pd.to_numeric(frame["turnover"], errors="coerce") * 100
+                elif "turn" not in frame.columns:
+                    frame["turn"] = np.nan
+                # 确保数值列类型正确
+                for col in ["open", "high", "low", "close", "volume", "amount", "turn"]:
+                    if col in frame.columns:
+                        frame[col] = pd.to_numeric(frame[col], errors="coerce")
                 yield symbol,frame,None
             except Exception as exc: yield symbol,pd.DataFrame(),type(exc).__name__
             time.sleep(delay)

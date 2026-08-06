@@ -46,6 +46,26 @@ def reasons(row) -> tuple[str, str]:
     return ("；".join(positives[:3]) or "当前指标未形成明显的中长线优势",
             "；".join(risks[:3]) or "若盈利趋势或行业景气转弱，当前结论可能失效")
 
+def append_spot_bar(path: Path, row, trading_day: date) -> bool:
+    """Append today's already-fetched quote instead of requesting history again."""
+    close=finite(getattr(row,"price",None))
+    amount=finite(getattr(row,"amount",None))
+    if close is None or amount is None or amount <= 0: return False
+    change=finite(getattr(row,"change",None))
+    preclose=finite(getattr(row,"preclose",None))
+    if preclose is None and change is not None and change != -100:
+        preclose=close/(1+change/100)
+    bar=pd.DataFrame([{"date":pd.Timestamp(trading_day),"open":finite(getattr(row,"open",None),close),
+      "high":finite(getattr(row,"high",None),close),"low":finite(getattr(row,"low",None),close),
+      "close":close,"preclose":preclose,"volume":finite(getattr(row,"volume",None)),"amount":amount,
+      "turn":finite(getattr(row,"turnover",None)),"pctChg":change,"tradestatus":"1","isST":"0"}])
+    old=pd.read_parquet(path)
+    old["date"]=pd.to_datetime(old["date"],errors="coerce")
+    combined=pd.concat([old,bar],ignore_index=True,sort=False).dropna(subset=["date"])
+    combined=combined.drop_duplicates("date",keep="last").sort_values("date")
+    combined.to_parquet(path,index=False)
+    return True
+
 def collect(data_root: Path, limit: int | None = None) -> Path:
     configure_network()
     raw = data_root / "raw"; history_dir = raw / "history"
@@ -71,18 +91,43 @@ def collect(data_root: Path, limit: int | None = None) -> Path:
         financial_source = "Sina" if not financial.empty else "unavailable"
     spot.to_parquet(raw / "spot.parquet", index=False)
     financial.to_parquet(raw / "financial.parquet", index=False)
-    symbols = spot.code.tolist(); end = date.today(); default_start = end - timedelta(days=900)
-    groups=defaultdict(list); cached_count=0
+    symbols = spot.code.tolist(); today=date.today()
+    try:
+        days=[day for day in ak.trading_days() if day <= today]
+        end=max(days)
+        if end == today and datetime.now(TZ).time() < datetime.strptime("15:05","%H:%M").time():
+            end=max(day for day in days if day < today)
+    except Exception as exc:
+        end=today
+        print(f"交易日历不可用，按当天检查: {type(exc).__name__}",flush=True)
+    previous=max((day for day in days if day < end),default=None) if 'days' in locals() else None
+    default_start = end - timedelta(days=900)
+    groups=defaultdict(list); cached_count=0; cache_errors=0
+    spot_appended=0; spot_rows={row.code:row for row in spot.itertuples()}
     for symbol in symbols:
         path=history_dir/f"{symbol}.parquet"; symbol_start=default_start
         if path.exists():
             try:
                 cached=pd.read_parquet(path,columns=["date"])
-                last=pd.to_datetime(cached["date"],errors="coerce").max()
-                if pd.notna(last): symbol_start=last.date()+timedelta(days=1)
-            except Exception: pass
+                if "date" in cached.columns:
+                    # 尝试多种日期格式兼容
+                    last=pd.to_datetime(cached["date"],errors="coerce").max()
+                    if pd.notna(last) and last.year > 2000:
+                        symbol_start=last.date()+timedelta(days=1)
+                        # 盘后 spot 已包含今日 OHLC，常规日更无需再逐只请求历史接口。
+                        if end == today and last.date() == previous:
+                            if symbol in spot_rows and append_spot_bar(path,spot_rows[symbol],end):
+                                symbol_start=end+timedelta(days=1); spot_appended+=1
+                    else:
+                        cache_errors+=1
+                else:
+                    cache_errors+=1
+            except Exception:
+                cache_errors+=1
         if symbol_start<=end: groups[symbol_start].append(symbol)
         else: cached_count+=1
+    if cache_errors>0: print(f"缓存检查: {cache_errors} 只股票缓存异常，将全量拉取", flush=True)
+    print(f"缓存检查: {cached_count} 只本地已就绪(其中 {spot_appended} 只追加当日行情), {sum(len(v) for v in groups.values())} 只需补历史", flush=True)
     def grouped(iterator_factory):
         for group_start,group_symbols in groups.items():
             yield from iterator_factory(group_symbols,group_start,end)
@@ -92,9 +137,18 @@ def collect(data_root: Path, limit: int | None = None) -> Path:
             if error or frame.empty: failed.append({"code":symbol,"error":error or "empty"})
             else:
                 path=history_dir/f"{symbol}.parquet"
+                # 统一date列为Timestamp类型，避免datetime.date与Timestamp混排报错
+                if "date" in frame.columns:
+                    frame["date"]=pd.to_datetime(frame["date"],errors="coerce")
                 if path.exists():
-                    old=pd.read_parquet(path); frame=pd.concat([old,frame],ignore_index=True)
-                    if "date" in frame: frame=frame.drop_duplicates("date",keep="last").sort_values("date")
+                    old=pd.read_parquet(path)
+                    if "date" in old.columns:
+                        old["date"]=pd.to_datetime(old["date"],errors="coerce")
+                    combined=pd.concat([old,frame],ignore_index=True,sort=False)
+                    if "date" in combined.columns:
+                        combined=combined.dropna(subset=["date"])
+                        combined=combined.drop_duplicates("date",keep="last").sort_values("date")
+                    frame=combined
                 frame.to_parquet(path,index=False); succeeded += 1
             if idx % 100 == 0 or idx == sum(map(len,groups.values())): print(f"{source} history {idx}/{sum(map(len,groups.values()))} (+{cached_count} cached)", flush=True)
         return succeeded, failed
