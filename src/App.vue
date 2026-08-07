@@ -8,13 +8,15 @@ import News from './News.vue'
 import Analytics from './Analytics.vue'
 import Toolkit from './Toolkit.vue'
 import Quant from './Quant.vue'
+import Members from './Members.vue'
 import { supabase } from './supabase.js'
 
 export default {
-  components: { Home, Accounting, Auth, Download, Blog, News, Analytics, Toolkit, Quant },
+  components: { Home, Accounting, Auth, Download, Blog, News, Analytics, Toolkit, Quant, Members },
   data() {
     return {
       currentPage: 'home',
+      pendingPage: null,
       user: null,
       loading: true,
       mobileOpen: false,
@@ -23,6 +25,7 @@ export default {
         { id: 'blog', label: '博客', icon: '✦' },
         { id: 'news', label: '资讯', icon: '◫' },
         { id: 'quant', label: '量化分析', icon: '∿' },
+        { id: 'members', label: '会员管理', icon: '◎' },
         { id: 'analytics', label: 'App 观测', icon: '⌁' },
         { id: 'toolkit', label: '工具', icon: '◇' }
       ]
@@ -45,10 +48,18 @@ export default {
         supabase.auth.onAuthStateChange((_event, session) => { this.user = session?.user || null })
       } catch (error) {
         console.warn('认证服务暂不可用', error)
-      } finally { this.loading = false }
+      } finally {
+        if (!this.user && ['accounting', 'members'].includes(this.currentPage)) {
+          this.pendingPage = this.currentPage
+          this.currentPage = 'auth'
+        }
+        this.loading = false
+      }
     },
     navigateTo(page) {
-      const target = page === 'accounting' && !this.user ? 'auth' : page
+      const protectedPages = ['accounting', 'members']
+      if (protectedPages.includes(page) && !this.user) this.pendingPage = page
+      const target = protectedPages.includes(page) && !this.user ? 'auth' : page
       if (target !== this.currentPage) {
         window.history.pushState({ page: target, from: this.currentPage }, '', window.location.href)
         this.currentPage = target
@@ -57,7 +68,11 @@ export default {
       document.querySelector('.page-content')?.scrollTo(0, 0)
     },
     handlePopState(event) {
-      this.currentPage = event.state?.page || 'home'
+      const page = event.state?.page || 'home'
+      if (['accounting', 'members'].includes(page) && !this.user) {
+        this.pendingPage = page
+        this.currentPage = 'auth'
+      } else this.currentPage = page
       this.mobileOpen = false
       document.querySelector('.page-content')?.scrollTo(0, 0)
     },
@@ -65,7 +80,12 @@ export default {
       if (window.history.state?.from) window.history.back()
       else this.navigateTo('home')
     },
-    handleAuthSuccess(user) { this.user = user; this.navigateTo('home') },
+    handleAuthSuccess(user) {
+      this.user = user
+      const target = this.pendingPage || 'home'
+      this.pendingPage = null
+      this.navigateTo(target)
+    },
     openStock(symbol) { sessionStorage.setItem('quant-open-symbol',symbol); this.navigateTo('quant') },
     async logout() {
       if (!confirm('确定要退出登录吗？')) return
@@ -102,6 +122,7 @@ export default {
       <Blog v-else-if="currentPage === 'blog'" />
       <News v-else-if="currentPage === 'news'" :user="user" @back="goBack" @open-stock="openStock" />
       <Quant v-else-if="currentPage === 'quant'" :user="user" />
+      <Members v-else-if="currentPage === 'members'" :user="user" />
       <Analytics v-else-if="currentPage === 'analytics'" />
       <Toolkit v-else-if="currentPage === 'toolkit'" />
       <Accounting v-else-if="currentPage === 'accounting'" />
@@ -130,5 +151,5 @@ button { color:inherit; }
 .loading-screen{height:calc(100vh - 74px);display:grid;place-content:center;text-align:center;color:var(--muted)}.loading-screen span{width:34px;height:34px;border:3px solid #d4d9cc;border-top-color:var(--green);border-radius:50%;animation:spin 1s linear infinite;margin:auto}@keyframes spin{to{transform:rotate(360deg)}}
 .page-wrap{max-width:1180px;margin:auto;padding:48px 24px 80px}.eyebrow{font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--green);font-weight:800}.page-title{font-family:Georgia,"Songti SC",serif;font-size:clamp(38px,5vw,68px);line-height:1.04;margin:10px 0 14px;letter-spacing:-2px}.page-lead{color:var(--muted);font-size:17px;max-width:650px;line-height:1.8}
 .pill{border:1px solid var(--line);background:var(--paper);padding:8px 14px;border-radius:999px;cursor:pointer}.pill.active{background:var(--green);color:white;border-color:var(--green)}
-@media(max-width:900px){.menu-btn{display:block}.topbar nav{display:none;position:absolute;top:74px;left:0;right:0;padding:12px;background:var(--paper);border-bottom:1px solid var(--line);grid-template-columns:repeat(2,1fr)}.topbar nav.open{display:grid}.topbar nav button{text-align:left}.brand small{display:none}.page-wrap{padding:32px 18px 60px}}
+@media(max-width:1120px){.menu-btn{display:block}.topbar nav{display:none;position:absolute;top:74px;left:0;right:0;padding:12px;background:var(--paper);border-bottom:1px solid var(--line);grid-template-columns:repeat(2,1fr)}.topbar nav.open{display:grid}.topbar nav button{text-align:left}.brand small{display:none}.page-wrap{padding:32px 18px 60px}}
 </style>
